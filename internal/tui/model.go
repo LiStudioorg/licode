@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"os"
+	"os/user"
 	"strings"
 	"time"
 
@@ -11,7 +12,8 @@ import (
 	"licode/internal/ai"
 )
 
-const Version = "0.0.46"
+const Version = "0.0.47"
+const sidebarW = 42
 
 type lipglossColor = string
 
@@ -86,6 +88,7 @@ type Model struct {
 	lines []line
 
 	basePath string
+	username string
 
 	input   string
 	hist    []string
@@ -97,9 +100,10 @@ type Model struct {
 	spinnerIdx  int
 	toolPending string // 正在运行的工具显示文本（用于 spinner 前缀）
 
-	cmdMenu  bool
-	cmdItems []cmdItem
-	cmdIdx   int
+	cmdMenu     bool
+	cmdItems    []cmdItem
+	cmdIdx      int
+	paletteOpen bool
 
 	listOpen     bool
 	listItems    []sessItem
@@ -120,15 +124,20 @@ type Model struct {
 }
 
 func NewModel(backend *Backend) *Model {
+	uname := ""
+	if u, err := user.Current(); err == nil {
+		uname = u.Username
+	}
 	m := &Model{
 		backend:     backend,
 		home:        true,
 		basePath:    cwd(),
+		username:    uname,
 		events:      make(chan agent.Event, 512),
 		cmdItems:    commandList(),
 		planExclude: "Write,Edit,Delete,Move,Bash,Shell",
 	}
-	m.listItems = m.sessionList()
+	m.refreshSessions()
 	return m
 }
 
@@ -143,6 +152,21 @@ func cwd() string {
 func (m *Model) showToast(msg string) {
 	m.toast = msg
 	m.toastExp = time.Now().Add(4 * time.Second)
+}
+
+func (m *Model) refreshSessions() {
+	m.listItems = m.sessionList()
+}
+
+func (m *Model) sidebarVisible() bool {
+	return m.w > 120
+}
+
+func (m *Model) bodyW() int {
+	if m.sidebarVisible() {
+		return m.w - sidebarW - 4
+	}
+	return m.w
 }
 
 // ── 生命周期 ──
@@ -216,7 +240,7 @@ func (m *Model) onEvent(e agent.Event) {
 		m.busy = false
 		m.cancel = nil
 		m.toolPending = ""
-		m.lines = append(m.lines, line{kind: kindNote, color: colorError, text: "错误: " + e.Error})
+		m.lines = append(m.lines, line{kind: kindNote, color: colorError, text: "⚠ " + e.Error})
 	case agent.EventDone:
 		if !m.busy {
 			return
@@ -257,6 +281,8 @@ func (m *Model) keyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case "esc":
 		switch {
+		case m.paletteOpen:
+			m.paletteOpen = false
 		case m.cmdMenu:
 			m.cmdMenu = false
 			m.input = ""
@@ -268,15 +294,28 @@ func (m *Model) keyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case "ctrl+p":
 		if !m.busy {
-			if m.cmdMenu {
-				m.cmdMenu = false
-				m.input = ""
+			if m.paletteOpen {
+				m.paletteOpen = false
 			} else {
+				m.paletteOpen = true
+				m.cmdMenu = false
 				m.openCmdMenu()
 			}
 		}
 		return m, nil
 	case "enter":
+		if m.paletteOpen {
+			m.paletteOpen = false
+			m.cmdMenu = false
+			m.input = ""
+			if m.cmdIdx < len(m.cmdItems) {
+				it := m.cmdItems[m.cmdIdx]
+				if it.run != nil {
+					it.run(m)
+				}
+			}
+			return m, nil
+		}
 		if m.cmdMenu {
 			if m.cmdIdx < len(m.cmdItems) {
 				it := m.cmdItems[m.cmdIdx]
@@ -324,6 +363,9 @@ func (m *Model) keyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.cmdMenu = false
 		return m, nil
 	default:
+		if m.paletteOpen {
+			return m, nil
+		}
 		switch {
 		case msg.Type == tea.KeyRunes && len(msg.Runes) > 0:
 			m.input += string(msg.Runes)
@@ -356,6 +398,10 @@ func (m *Model) onCtrlC() (tea.Model, tea.Cmd) {
 
 func (m *Model) up() {
 	switch {
+	case m.paletteOpen:
+		if m.cmdIdx > 0 {
+			m.cmdIdx--
+		}
 	case m.cmdMenu:
 		if m.cmdIdx > 0 {
 			m.cmdIdx--
@@ -383,6 +429,10 @@ func (m *Model) up() {
 
 func (m *Model) down() {
 	switch {
+	case m.paletteOpen:
+		if m.cmdIdx < len(m.cmdItems)-1 {
+			m.cmdIdx++
+		}
 	case m.cmdMenu:
 		if m.cmdIdx < len(m.cmdItems)-1 {
 			m.cmdIdx++

@@ -31,16 +31,166 @@ type row struct {
 }
 
 func (m *Model) View() string {
+	if m.paletteOpen {
+		return m.paletteView()
+	}
+	var main string
 	switch {
 	case m.home:
-		return m.viewHome()
+		main = m.viewHome()
 	case m.listOpen:
-		return m.viewList()
+		main = m.viewList()
 	case m.settingOpen:
-		return m.viewSettings()
+		main = m.viewSettings()
 	default:
-		return m.viewChat()
+		main = m.viewChat()
 	}
+	if !m.sidebarVisible() {
+		return main
+	}
+	return lipgloss.JoinHorizontal(lipgloss.Top, m.viewSidebar(), main, m.sidebarRightPad())
+}
+
+// ── 宽屏侧栏（照抄 opencode：≥121 列显示 42 列侧栏，主区在剩余宽度内布局） ──
+
+// ── 命令面板（Ctrl+p 居中弹窗，照抄 opencode command palette） ──
+
+func (m *Model) paletteView() string {
+	w := m.w
+	h := m.h
+	if w < 10 {
+		w = 10
+	}
+	if h < 1 {
+		h = 1
+	}
+	items := m.cmdItems
+	if len(items) == 0 {
+		items = commandList()
+	}
+	boxW := min(w-4, 64)
+	if boxW < 12 {
+		boxW = 12
+	}
+	boxH := min(h-2, len(items)+4)
+	if boxH < 5 {
+		boxH = 5
+	}
+	inner := boxW - 2
+	col := max(0, (w-boxW)/2)
+	rowTop := max(0, (h-boxH)/2)
+
+	rows := make([]string, boxH)
+	border := lipgloss.NewStyle().Foreground(lipgloss.Color(colorMuted))
+	selStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(colorAccent)).Background(lipgloss.Color(colorElement))
+	plainStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(colorText))
+
+	rows[0] = border.Render("┌" + strings.Repeat("─", inner) + "┐")
+	title := " commands "
+	padL := max(0, (inner-lipgloss.Width(title))/2)
+	rows[1] = border.Render("│") + border.Render(strings.Repeat(" ", padL)+title+strings.Repeat(" ", max(0, inner-padL-lipgloss.Width(title)))) + border.Render("│")
+	rows[2] = border.Render("│") + lipgloss.NewStyle().Background(lipgloss.Color(colorPanel)).Render(strings.Repeat(" ", inner)) + border.Render("│")
+
+	row := 3
+	for i := 0; i < len(items) && row < boxH-1; i++ {
+		c := items[i]
+		text := "/" + c.name + "   " + c.title
+		if lipgloss.Width(text) > inner {
+			text = truncate(text, inner)
+		}
+		style := plainStyle
+		if i == m.cmdIdx {
+			style = selStyle
+		}
+		fill := style.Background(lipgloss.Color(colorBg)).Render(text + strings.Repeat(" ", max(0, inner-lipgloss.Width(text))))
+		rows[row] = border.Render("│") + fill + border.Render("│")
+		row++
+	}
+	for ; row < boxH-1; row++ {
+		rows[row] = border.Render("│") + lipgloss.NewStyle().Background(lipgloss.Color(colorBg)).Render(strings.Repeat(" ", inner)) + border.Render("│")
+	}
+	rows[boxH-1] = border.Render("└" + strings.Repeat("─", inner) + "┘")
+
+	lines := make([]string, h)
+	for i := 0; i < h; i++ {
+		if i < rowTop || i >= rowTop+boxH {
+			lines[i] = blankLine(w, colorBg)
+			continue
+		}
+		body := rows[i-rowTop]
+		fill := lipgloss.NewStyle().Background(lipgloss.Color(colorBg)).Render(strings.Repeat(" ", col) + body + strings.Repeat(" ", max(0, w-col-boxW)))
+		lines[i] = fill
+	}
+	return joinLines(lines)
+}
+
+func (m *Model) viewSidebar() string {
+	lines := make([]string, m.h)
+	if m.h == 0 {
+		return ""
+	}
+	panelBg := lipgloss.Color(colorPanel)
+	title := "licode"
+	if !m.home {
+		if t := m.currentSessionTitle(); t != "" {
+			title = t
+		}
+	}
+	if m.h > 1 {
+		titleStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(colorText)).Background(panelBg)
+		lines[1] = sidebarRow(title, titleStyle)
+	}
+	sub := m.username
+	if sub == "" {
+		sub = m.basePath
+	}
+	subStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(colorMuted)).Background(panelBg)
+	for i := 2; i < m.h-2; i++ {
+		if sub != "" {
+			lines[i] = sidebarRow("   "+sub, subStyle)
+			sub = ""
+		} else {
+			lines[i] = lipgloss.NewStyle().Background(panelBg).Render(strings.Repeat(" ", sidebarW))
+		}
+	}
+	if m.h > 2 {
+		footStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(colorMuted)).Background(panelBg)
+		lines[m.h-2] = sidebarRow("• LiCode "+Version, footStyle)
+		lines[m.h-1] = sidebarRow("", footStyle)
+	}
+	return joinLines(lines)
+}
+
+func (m *Model) sidebarRightPad() string {
+	lines := make([]string, m.h)
+	for i := range lines {
+		lines[i] = blankLine(4, colorBg)
+	}
+	return joinLines(lines)
+}
+
+func (m *Model) currentSessionTitle() string {
+	id := m.backend.CurrentID()
+	for _, it := range m.listItems {
+		if it.id == id {
+			return it.title
+		}
+	}
+	return ""
+}
+
+func sidebarRow(text string, style lipgloss.Style) string {
+	avail := sidebarW - 4 // paddingLeft2 + 右侧留白
+	r := []rune(text)
+	if lipgloss.Width(text) > avail {
+		r = r[:avail-1]
+		text = string(r) + "…"
+	}
+	padR := sidebarW - 2 - lipgloss.Width(text)
+	if padR < 0 {
+		padR = 0
+	}
+	return style.Padding(0, padR, 0, 2).Render(text)
 }
 
 // ── 首页（logo + 居中 Prompt） ──
@@ -58,7 +208,7 @@ var logoFont = [][]string{
 var logoColors = []string{colorAccent, colorAccent, colorText, colorText, colorText, colorText}
 
 func (m *Model) viewHome() string {
-	w := m.w
+	w := m.bodyW()
 	if w < 10 {
 		w = 10
 	}
@@ -102,6 +252,7 @@ func (m *Model) overlayHomeMenu(lines []string, base int) {
 	if n == 0 {
 		return
 	}
+	w := m.bodyW()
 	for i := 0; i < n; i++ {
 		idx := len(lines) - 1 - i
 		if idx <= base {
@@ -120,7 +271,7 @@ func (m *Model) overlayHomeMenu(lines []string, base int) {
 		lines[idx] = lipgloss.NewStyle().
 			Foreground(lipgloss.Color(color)).
 			Background(lipgloss.Color(colorBg)).
-			Render(text + strings.Repeat(" ", max(0, m.w-lipgloss.Width(text))))
+			Render(text + strings.Repeat(" ", max(0, w-lipgloss.Width(text))))
 	}
 }
 
@@ -144,8 +295,9 @@ func (m *Model) logoLine(i int) []string {
 		b.WriteString(logoGlyphRow(glyph[i], logoColors[j]))
 	}
 	text := b.String()
-	pad := max(0, (m.w-lipgloss.Width(text))/2)
-	tail := max(0, m.w-pad-lipgloss.Width(text))
+	w := m.bodyW()
+	pad := max(0, (w-lipgloss.Width(text))/2)
+	tail := max(0, w-pad-lipgloss.Width(text))
 	return []string{
 		lipgloss.NewStyle().Background(lipgloss.Color(colorBg)).
 			Render(strings.Repeat(" ", pad) + text + strings.Repeat(" ", tail)),
@@ -172,7 +324,7 @@ func logoGlyphRow(glyph, fg string) string {
 // ── 会话视图 ──
 
 func (m *Model) viewChat() string {
-	w := m.w
+	w := m.bodyW()
 	if w < 10 {
 		w = 10
 	}
@@ -298,7 +450,7 @@ func (m *Model) buildRows() []row {
 }
 
 func (m *Model) chunkMax() int {
-	w := m.w - 7
+	w := m.bodyW() - 7
 	if w < 20 {
 		w = 20
 	}
@@ -601,7 +753,7 @@ func parseArgs(args string) map[string]any {
 // ── 行渲染 ──
 
 func (m *Model) renderRow(r row) string {
-	w := m.w
+	w := m.bodyW()
 	prefix := r.indent
 	if r.borderColor != "" {
 		prefix += lipgloss.NewStyle().Foreground(lipgloss.Color(r.borderColor)).Render(borderChar) + "  "
@@ -776,7 +928,7 @@ var statusFrames = []string{"▁", "▂", "▃", "▄", "▅", "▆", "▇", "�
 
 // 顶部 toast（右对齐，absolute top=2）
 func (m *Model) toastLine() string {
-	w := m.w
+	w := m.bodyW()
 	msg := m.toast
 	lim := min(60, w-6) - 4
 	if lim < 1 {
@@ -794,24 +946,40 @@ func (m *Model) toastLine() string {
 
 // ── 会话列表 / 设置 ──
 func (m *Model) viewList() string {
-	var sb strings.Builder
-	sb.WriteString(blankLine(m.w, colorBg) + "\n")
-	sb.WriteString("  会话列表\n\n")
+	w := m.bodyW()
+	if w < 10 {
+		w = 10
+	}
+	var lines []string
+	lines = append(lines, blankLine(w, colorBg))
+	lines = append(lines, "  "+mutedStyle.Render("会话列表")+"\n")
 	for i, it := range m.listItems {
 		if i == m.listSelected {
-			sb.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color(colorAccent)).Background(lipgloss.Color(colorElement)).Render("▍ "+it.title) + "\n")
+			lines = append(lines, lipgloss.NewStyle().Foreground(lipgloss.Color(colorAccent)).Background(lipgloss.Color(colorElement)).Render("▍ "+it.title))
 		} else {
-			sb.WriteString("  " + it.title + "\n")
+			lines = append(lines, "  "+it.title)
 		}
 	}
-	sb.WriteString("\n  ↑/↓ 选择 · Enter 打开 · Esc 返回\n")
-	return sb.String()
+	lines = append(lines, "\n  "+mutedStyle.Render("↑/↓ 选择 · Enter 打开 · Esc 返回"))
+	for len(lines) < m.h {
+		lines = append(lines, "")
+	}
+	for i, ln := range lines {
+		if lipgloss.Width(ln) < w {
+			lines[i] = ln + strings.Repeat(" ", w-lipgloss.Width(ln))
+		}
+	}
+	return joinLines(lines)
 }
 
 func (m *Model) viewSettings() string {
-	var sb strings.Builder
-	sb.WriteString(blankLine(m.w, colorBg) + "\n")
-	sb.WriteString("  设置\n\n")
+	w := m.bodyW()
+	if w < 10 {
+		w = 10
+	}
+	var lines []string
+	lines = append(lines, blankLine(w, colorBg))
+	lines = append(lines, "  "+mutedStyle.Render("设置")+"\n")
 	for i, key := range settingFields {
 		label := key
 		if key == "plan_exclude" {
@@ -819,17 +987,25 @@ func (m *Model) viewSettings() string {
 		}
 		val := m.settingValue(key)
 		if i == m.settingField {
-			sb.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color(colorAccent)).Background(lipgloss.Color(colorElement)).Render("▍ "+label+": "+val) + "\n")
+			lines = append(lines, lipgloss.NewStyle().Foreground(lipgloss.Color(colorAccent)).Background(lipgloss.Color(colorElement)).Render("▍ "+label+": "+val))
 			hint := m.settingHint(key)
 			if hint != "" {
-				sb.WriteString("     " + mutedStyle.Render(hint) + "\n")
+				lines = append(lines, "     "+mutedStyle.Render(hint))
 			}
 		} else {
-			sb.WriteString("  " + label + ": " + val + "\n")
+			lines = append(lines, "  "+label+": "+val)
 		}
 	}
-	sb.WriteString("\n  Enter 编辑（自动填充 /set 命令）· Esc 返回\n")
-	return sb.String()
+	lines = append(lines, "\n  "+mutedStyle.Render("Enter 编辑（自动填充 /set 命令）· Esc 返回"))
+	for len(lines) < m.h {
+		lines = append(lines, "")
+	}
+	for i, ln := range lines {
+		if lipgloss.Width(ln) < w {
+			lines[i] = ln + strings.Repeat(" ", w-lipgloss.Width(ln))
+		}
+	}
+	return joinLines(lines)
 }
 
 func min(a, b int) int {
