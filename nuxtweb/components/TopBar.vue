@@ -82,7 +82,6 @@ function toggleRight(tab: 'info' | 'files') {
     </Button>
     <Divider direction="vertical" class="h-5" />
     <Button variant="ghost" size="sm" :icon="mode === 'dark' ? Sun : Moon" title="切换主题" @click="toggleTheme" />
-    <Button variant="ghost" size="sm" :icon="Settings" title="设置" @click="state.settingsOpen = true" />
     <Button
       variant="ghost"
       size="sm"

@@ -42,6 +42,14 @@ const mcpJson = ref('')
 const mcpServers = ref<any[]>([])
 const fetching = ref('')
 const saving = ref(false)
+const shellOptions = ref<{ label: string; value: string }[]>([])
+
+async function loadShells() {
+  try {
+    const shells = await useApi<string[]>('/api/shells')
+    shellOptions.value = (shells || []).map((s) => ({ label: s, value: s }))
+  } catch {}
+}
 
 const mcpPresets: Record<string, any> = {
   filesystem: { name: 'filesystem', type: 'stdio', command: 'npx', args: ['-y', '@modelcontextprotocol/server-filesystem', '/'] },
@@ -120,6 +128,7 @@ watch(
   () => state.settingsOpen,
   (v) => {
     if (v && state.settings) {
+      loadShells()
       local.value = JSON.parse(JSON.stringify(state.settings))
       if (local.value.streaming === null || local.value.streaming === undefined) local.value.streaming = true
       toolRows.value = Object.entries(local.value.tool_rules || {}).map(([tool, rule]) => ({
@@ -574,7 +583,11 @@ function save() {
           <template v-else-if="tab === 'advanced'">
             <div class="grid grid-cols-2 gap-3">
               <label class="space-y-1">
-                <span class="text-xs text-zinc-500">Shell 路径</span>
+                <span class="text-xs text-zinc-500">Shell 路径（自动检测）</span>
+                <Select :options="shellOptions" :model-value="local.shell_path" size="sm" @update:model-value="local.shell_path = String($event)" placeholder="选择已检测到的 shell" clearable />
+              </label>
+              <label class="space-y-1">
+                <span class="text-xs text-zinc-500">Shell 路径（自定义）</span>
                 <Input v-model="local.shell_path" placeholder="/bin/sh" />
               </label>
               <label class="space-y-1">

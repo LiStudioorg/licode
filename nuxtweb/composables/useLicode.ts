@@ -424,6 +424,25 @@ function createStore() {
     send('session_branch', { sessionId: state.sessionId, index: -1 })
   }
 
+  function exportSession(id: string, title: string) {
+    fetch(`/api/session/export?session_id=${id}`)
+      .then((r) => {
+        if (!r.ok) throw new Error('export failed')
+        return r.blob()
+      })
+      .then((blob) => {
+        const url = URL.createObjectURL(blob)
+        const a = document.createElement('a')
+        a.href = url
+        a.download = `${(title || 'session').replace(/[\\/:*?"<>|]/g, '_')}-${id}.md`
+        document.body.appendChild(a)
+        a.click()
+        document.body.removeChild(a)
+        URL.revokeObjectURL(url)
+      })
+      .catch(() => {})
+  }
+
   function saveSettings(next: Settings) {
     state.settings = next
     send('settings_set', { settings: next })
@@ -445,6 +464,7 @@ function createStore() {
     renameSession,
     deleteSession,
     branchSession,
+    exportSession,
     saveSettings,
     clearMessages,
   }

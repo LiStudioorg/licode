@@ -372,6 +372,18 @@ func runServe(opts *ServeOptions) error {
 		}
 		handleExport(w, r)
 	})
+	mux.HandleFunc("/api/session/export", func(w http.ResponseWriter, r *http.Request) {
+		if !auth.require(w, r) {
+			return
+		}
+		handleSessionExport(w, r)
+	})
+	mux.HandleFunc("/api/shells", func(w http.ResponseWriter, r *http.Request) {
+		if !auth.require(w, r) {
+			return
+		}
+		handleShells(w, r)
+	})
 	mux.HandleFunc("/api/import", func(w http.ResponseWriter, r *http.Request) {
 		if !auth.require(w, r) {
 			return
@@ -466,7 +478,7 @@ func runServe(opts *ServeOptions) error {
 		}
 		searchAPI.handleSearchStats(w, r)
 	})
-	// HTMX 片段：设置弹窗 / 文件树 / 审计面板（服务器渲染 HTML）
+	// HTMX 片段：设置弹窗 / 文件树（服务器渲染 HTML）
 	registerFragmentRoutes(mux, auth, st, wsState, hub)
 	mux.HandleFunc("/api/models", func(w http.ResponseWriter, r *http.Request) {
 		if !auth.require(w, r) {

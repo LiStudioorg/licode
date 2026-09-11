@@ -47,7 +47,7 @@ const (
 	EvtHistory = "history"
 )
 
-// Broadcast 向所有已连接客户端发送事件（审计完成通知等）。
+// Broadcast 向所有已连接客户端发送事件。
 func (h *Hub) Broadcast(ev ServerEvent) {
 	h.mu.Lock()
 	clients := make([]*Client, 0, len(h.clients))
