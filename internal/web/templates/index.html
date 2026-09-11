@@ -76,7 +76,6 @@
       <button class="active" onclick="switchTab('info',this)">信息</button>
       <button onclick="switchTab('files',this)">文件</button>
       <button onclick="switchTab('search',this)">搜索</button>
-      <button onclick="switchTab('audit',this)">审计</button>
     </div>
     <div class="rpanel" id="tabInfo">
       <h4>会话</h4>
@@ -92,7 +91,7 @@
         <input type="file" id="impFile" accept=".zip" style="display:none" onchange="importBackup(this.files[0])" />
       </div>
       <h4>联系与交流</h4>
-      <div class="row"><span>GitHub</span><a href="https://github.com/li63050a/licode" target="_blank" style="color:var(--primary);text-decoration:none">li63050a/licode</a></div>
+      <div class="row"><span>GitHub</span><a href="https://github.com/li63050a6/licode" target="_blank" style="color:var(--primary);text-decoration:none">li63050a6/licode</a></div>
       <div class="row"><span>Gitee</span><a href="https://gitee.com/li63050a/licode" target="_blank" style="color:var(--primary);text-decoration:none">li63050a/licode</a></div>
       <div class="row"><span>B 站</span><a href="https://b23.tv/nDqj0DT" target="_blank" style="color:var(--primary);text-decoration:none">小帅5656</a></div>
       <div class="row"><span>QQ 群</span><a href="https://qun.qq.com/universal-share/share?ac=1&authKey=zq9BYcTtBQm6GbvWiEWiBvDWNWbqhw2%2F%2BRnGM21c0jcL%2FofGqBFeXLr%2BtYT3SkO6&busi_data=eyJncm91cENvZGUiOiIxMDI2OTM5NzQxIiwidG9rZW4iOiJxNkNWUTUxYXVxSmRHZXRvdWtkZnhaN25INzJrMmNaNFpVTjJ5ZTVLYmRvWTFuOEZTd093UXBtQi8vQWk2T1JyIiwidWluIjoiMzYzNTczNjE4MCJ9&data=073ZrPEFZXFvoEDWatbWTidAitiN4OIbiaVDWoR7hVIwJurEPC7Swm6OREVpn6omzobXLn3SRErNKxKbYDTZQA&svctype=4&tempid=h5_group_info" target="_blank" style="color:var(--primary);text-decoration:none">1026939741</a></div>
@@ -151,22 +150,6 @@
 <div class="modal" id="settingsModal"></div>
 
 <div id="toast"></div>
-
-<!-- 代码审计：修复预览（二次确认） -->
-<div class="modal" id="diffModal">
-  <div class="box" style="width:860px;max-width:96vw">
-    <div class="hd">修复预览 <span id="diffFileList" style="font-size:12px;color:var(--muted);font-weight:400"></span>
-      <button class="ib" onclick="closeDiff()">✕</button></div>
-    <div class="bd" style="padding:0;max-height:62vh;overflow:auto" id="diffBody"></div>
-    <div class="bd" id="diffNote" style="padding:8px 20px;font-size:12px;color:var(--muted);display:none">
-      确认后将对文件生成 <code>.bak</code> 备份，再写入修复内容。
-    </div>
-    <div class="ft">
-      <button class="btn" onclick="closeDiff()">取消</button>
-      <button class="btn p" onclick="confirmFix()">确认修复</button>
-    </div>
-  </div>
-</div>
 
 <script src="/static/app.js"></script>
 </body>

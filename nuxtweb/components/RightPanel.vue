@@ -8,7 +8,6 @@ const tabs = [
   { label: '信息', value: 'info' },
   { label: '文件', value: 'files' },
   { label: '搜索', value: 'search' },
-  { label: '审计', value: 'audit' },
 ]
 </script>
 
@@ -33,7 +32,6 @@ const tabs = [
         <InfoPanel v-if="state.rightTab === 'info'" />
         <FilesPanel v-else-if="state.rightTab === 'files'" />
         <SearchPanel v-else-if="state.rightTab === 'search'" />
-        <AuditPanel v-else />
       </div>
     </template>
   </aside>

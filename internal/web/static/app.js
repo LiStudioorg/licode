@@ -141,8 +141,6 @@ function saveSettings(){
     sandbox:$('sSandbox').value==='on',sandbox_image:$('sSandImg').value||'',
     cache_enabled:$('sCache').value==='on',tool_auto_retry:$('sAutoRetry').value==='on',
     rag_enabled:$('sRAG').value==='on',rag_source:$('sRAGSrc').value||'',
-    audit_enabled:$('sAudit').value==='on',audit_auto_fix:$('sAuditFix').value==='on',
-    audit_exclude:$('sAuditEx').value.split(',').map(x=>x.trim()).filter(Boolean),
     mcp_servers:mcp,providers:provs
   }}));
   closeSettings();toast('设置已保存');
@@ -153,10 +151,8 @@ function switchTab(tab,btn){
   $('tabInfo').style.display=tab==='info'?'':'none';
   $('tabFiles').style.display=tab==='files'?'':'none';
   $('tabSearch').style.display=tab==='search'?'':'none';
-  $('tabAudit').style.display=tab==='audit'?'':'none';
   document.querySelectorAll('.rtabs button').forEach(b=>b.classList.remove('active'));
   btn.classList.add('active');
-  if(tab==='audit')loadAudit();
   if(tab==='files')loadDir();
   if(tab==='search')initSearchTab();
 }
@@ -472,104 +468,6 @@ function stopGen(){
   if(!ws||busy){ws.send(JSON.stringify({type:'interrupt'}));busy=false;lastAsst=null;$('stop').style.display='none';$('send').disabled=false;$('statusBar').textContent='已停止';}
 }
 
-/* 代码审计（HTMX：面板由 /fragment/audit 服务器渲染；修复预览/确认仍走 /api/audit/fix） */
-let auditData={selected:{}};
-function loadAudit(){
-  const sevEl=$('aSev');
-  const sev=(sevEl&&sevEl.value)||'all';
-  const url='/fragment/audit?sev='+encodeURIComponent(sev);
-  if(window.htmx){
-    htmx.ajax('GET',url,{target:'#tabAudit',swap:'innerHTML'});
-  }else{
-    fetch(url).then(r=>r.text()).then(t=>{$('tabAudit').innerHTML=t;if(window.htmx)htmx.process($('tabAudit'));}).catch(e=>{$('tabAudit').innerHTML='<div style="padding:12px;color:var(--red)">'+esc(e.message)+'</div>';});
-  }
-}
-function updateSelCount(){
-  const n=Object.keys(auditData.selected).length;
-  const el=$('aSelCount');if(el)el.textContent='已选 '+n;
-  const fb=$('aFixBar');if(fb)fb.querySelector('button').disabled=!n;
-}
-function selAllIssues(checked){
-  document.querySelectorAll('#tabAudit input[data-id]').forEach(cb=>{
-    cb.checked=checked;
-    if(checked)auditData.selected[cb.dataset.id]=true;else delete auditData.selected[cb.dataset.id];
-  });
-  updateSelCount();
-}
-document.addEventListener('change',e=>{
-  const t=e.target;
-  if(!t)return;
-  if(t.id==='aSelAll'){selAllIssues(t.checked);return;}
-  if(t.type==='checkbox'&&t.dataset&&t.dataset.id){
-    if(t.checked)auditData.selected[t.dataset.id]=true;else delete auditData.selected[t.dataset.id];
-    updateSelCount();
-  }
-});
-/* 服务器渲染片段 swap 之后：重新套用已勾选状态、设置弹窗显示 */
-document.body.addEventListener('htmx:afterSwap',e=>{
-  const target=e.detail&&e.detail.target;
-  if(!target)return;
-  if(target.id==='settingsModal')showSettingsModal();
-  if(target.id==='tabAudit'){
-    document.querySelectorAll('#tabAudit input[data-id]').forEach(cb=>{cb.checked=!!auditData.selected[cb.dataset.id];});
-    updateSelCount();
-  }
-});
-let previewTaskId='',previewIds=[],previewFiles=[];
-async function genPreview(){
-  const ids=Object.keys(auditData.selected);
-  if(!ids.length){toast('请先勾选要修复的问题');return;}
-  const el=$('aTaskId');
-  const tid=(el&&el.value)||'';
-  const st=$('aStatus');if(st)st.textContent='⏳ 正在生成修复预览（调用 LLM）…';
-  try{
-    const r=await fetch('/api/audit/fix',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({task_id:tid,issue_ids:ids})});
-    const d=await r.json();
-    if(!r.ok)throw new Error(d.error||'生成失败');
-    previewTaskId=tid;previewIds=ids;
-    openDiff(d.preview||{});
-    if(st)st.textContent='';
-  }catch(e){if(st)st.textContent='生成预览失败: '+e.message;}
-}
-async function confirmFix(){
-  const r=await fetch('/api/audit/fix?confirm=true',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({task_id:previewTaskId,issue_ids:previewIds})});
-  const d=await r.json();
-  if(!r.ok){toast('修复失败: '+(d.error||''));return;}
-  closeDiff();
-  toast('已修复 '+(d.files||[]).length+' 个文件（已备份 .bak）');
-  if(ws&&ws.readyState===WebSocket.OPEN){
-    ws.send(JSON.stringify({type:'audit_log',content:'[代码审计] 已修复 '+(d.files||[]).join(', ')+'，原文件已备份为 .bak' }));
-  }
-  auditData.selected={};
-  loadAudit();
-}
-function openDiff(diffs){
-  const body=$('diffBody');body.innerHTML='';
-  previewFiles=Object.keys(diffs||{});
-  $('diffFileList').textContent=previewFiles.length?('共 '+previewFiles.length+' 个文件'):'';
-  let affected=false;
-  previewFiles.forEach(path=>{
-    const d=diffs[path];
-    const file=document.createElement('div');file.className='diff-file';
-    file.innerHTML='<div class="fh">'+esc(path)+'</div>';
-    const fl=document.createElement('pre');
-    d.split('\n').forEach(l=>{
-      const span=document.createElement('span');
-      if(l.startsWith('@@'))span.className='diff-line hunk';
-      else if(l.startsWith('+')&&!l.startsWith('+++')){span.className='diff-line add';affected=true;}
-      else if(l.startsWith('-')&&!l.startsWith('---'))span.className='diff-line del';
-      else span.className='diff-line ctx';
-      span.textContent=l;
-      fl.appendChild(span);
-    });
-    file.appendChild(fl);
-    body.appendChild(file);
-  });
-  if(!affected){$('diffNote').style.display='block';}
-  document.getElementById('diffModal').classList.add('on');
-}
-function closeDiff(){document.getElementById('diffModal').classList.remove('on');}
-
 /* connection */
 function connect(){
   const proto=location.protocol==='https:'?'wss':'ws';
@@ -617,10 +515,6 @@ function connect(){
       case 'interrupt':
         setBusy(false);tools=[];
         $('statusBar').textContent='';
-        break;
-      case 'audit_log':
-        // 审计在后台完成时推送；刷新审计面板（无需在聊天重复落盘）
-        loadAudit();
         break;
     }
   };

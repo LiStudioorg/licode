@@ -65,10 +65,6 @@ export interface Settings {
   rag_enabled?: boolean
   rag_source?: string
   rag_top_files?: number
-  audit_enabled?: boolean
-  audit_auto_fix?: boolean
-  audit_scan_dirs?: string[]
-  audit_exclude?: string[]
   dns?: DNSConfig
 }
 
@@ -162,9 +158,8 @@ function createStore() {
     settings: null as Settings | null,
     stats: emptyStats(),
     settingsOpen: false,
-    rightTab: '' as '' | 'info' | 'files' | 'search' | 'audit',
+    rightTab: '' as '' | 'info' | 'files' | 'search',
     sidebarCollapsed: false,
-    auditTick: 0,
   })
 
   let ws: WebSocket | null = null
@@ -357,16 +352,6 @@ function createStore() {
       case 'stats':
         state.stats = { ...state.stats, ...(evt.stats ?? {}) }
         break
-      case 'audit_log': {
-        state.auditTick++
-        try {
-          const s = JSON.parse(String(evt.content ?? '{}'))
-          Message.success(
-            `审计完成：严重 ${s.critical ?? 0} · 高 ${s.high ?? 0} · 中 ${s.medium ?? 0} · 低 ${s.low ?? 0}`,
-          )
-        } catch {}
-        break
-      }
     }
   }
 

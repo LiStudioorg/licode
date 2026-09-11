@@ -29,8 +29,6 @@ const (
 	TypeSessionDelete  = "session_delete"  // {session_id}
 	TypeSessionBranch  = "session_branch"  // {session_id, index, content}
 	TypeSessionHistory = "session_history" // {session_id} 请求某会话的完整历史消息
-	// 审计完成后，前端把摘要通过该类型提交，服务端追加为一条助手消息。
-	TypeAuditLog = "audit_log" // {content: 摘要文本}
 )
 
 // Event types (server -> client), mirroring agent.Event.
@@ -47,8 +45,6 @@ const (
 	EvtStats     = "stats"
 	// EvtHistory 回放某个会话的完整历史消息（存放于 ~/.licode/sessions/*.json）。
 	EvtHistory = "history"
-	// EvtAuditLog 把审计结果/修复摘要推送到所有页面（含后台监听）。
-	EvtAuditLog = "audit_log"
 )
 
 // Broadcast 向所有已连接客户端发送事件（审计完成通知等）。

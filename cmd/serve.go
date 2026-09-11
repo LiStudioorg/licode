@@ -22,7 +22,6 @@ import (
 
 	"licode/internal/agent"
 	"licode/internal/ai"
-	"licode/internal/audit"
 	"licode/internal/plugin"
 	"licode/internal/rag"
 	"licode/internal/session"
@@ -132,8 +131,7 @@ type serverState struct {
 	settings     settings.Settings
 	client       ai.LLMClient
 	shuttingDown bool           // 收到关停信号后置位，拒绝新连接
-	rag          *rag.Index     // 特性5：项目源码轻量 RAG 索引（懒构建）
-	audit        *audit.Manager // 代码审计任务管理器
+	rag *rag.Index // 特性5：项目源码轻量 RAG 索引（懒构建）
 }
 
 // connState 保存每个连接独立的会话（多对话）与待确认的工具调用。
@@ -182,7 +180,6 @@ func runServe(opts *ServeOptions) error {
 	st := &serverState{}
 	st.settings = settings.Defaults()
 	st.settings.ApplyFlags(opts.NoSubAgents)
-	st.audit = audit.NewManager()
 
 	client, err := st.settings.NewClient()
 	if err != nil {
@@ -273,13 +270,6 @@ func runServe(opts *ServeOptions) error {
 				c.SendEvent(websocket.ServerEvent{
 					Type: websocket.EvtSessions, Sessions: cs.sessions.List(), SessionID: cs.sessions.CurrentID(),
 				})
-
-			case websocket.TypeAuditLog:
-				if strings.TrimSpace(msg.Content) != "" {
-					cs.sessions.Current().Add(ai.Message{Role: ai.RoleAssistant, Content: msg.Content})
-					_ = cs.sessions.SaveAll()
-					c.SendEvent(websocket.ServerEvent{Type: websocket.EvtDone})
-				}
 
 			case websocket.TypeAskReply:
 				cs.mu.Lock()
@@ -433,8 +423,6 @@ func runServe(opts *ServeOptions) error {
 			"counter": version.Parse(version.Current()),
 		})
 	})
-	// 代码审计：状态 / 启动 / 结果 / 一键修复（预览 + 二次确认）
-	registerAuditRoutes(mux, st, wsState, hub)
 	// 联网搜索：本地库 + 多引擎 meta 搜索 + 网页预览/收录
 	mux.HandleFunc("/api/search/engines", func(w http.ResponseWriter, r *http.Request) {
 		if !auth.require(w, r) {

@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { Plus, Trash2, Pencil, Check, X } from 'lucide-vue-next'
-import { Message, Dialog, Button, Input, Empty } from 'fuxsto-design'
+import { Plus, Trash2, Pencil, Check, X, MoreHorizontal, Settings, Download } from 'lucide-vue-next'
+import { Message, Dialog, Button, Input, Empty, Menu } from 'fuxsto-design'
 
 const licode = useLicode()
 const { state } = licode
@@ -20,6 +20,12 @@ function commitRename() {
   editingId.value = ''
 }
 
+function onMenu(item: any, s: { id: string; title: string }) {
+  if (item.value === 'rename') startRename(s.id, s.title)
+  else if (item.value === 'export') exportSession(s.id, s.title)
+  else if (item.value === 'delete') removeSession(s.id, s.title)
+}
+
 function removeSession(id: string, title: string) {
   Dialog.confirm({
     title: '删除会话',
@@ -31,6 +37,10 @@ function removeSession(id: string, title: string) {
       Message.success('会话已删除')
     },
   })
+}
+
+function exportSession(id: string, title: string) {
+  licode.exportSession(id, title)
 }
 
 const statusMap = {
@@ -78,20 +88,33 @@ const statusMap = {
         <template v-else>
           <span class="min-w-0 flex-1 truncate" :title="s.title">{{ s.title }}</span>
           <span class="shrink-0 text-[10px] tabular-nums text-zinc-400">{{ s.count }}</span>
-          <span class="hidden shrink-0 items-center group-hover:flex">
-            <button class="p-1 text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200" title="重命名" @click.stop="startRename(s.id, s.title)">
-              <Pencil :size="13" />
-            </button>
-            <button class="p-1 text-zinc-400 hover:text-red-500" title="删除" @click.stop="removeSession(s.id, s.title)">
-              <Trash2 :size="13" />
-            </button>
-          </span>
+          <Menu
+            :options="[[
+              { label: '重命名', value: 'rename', icon: Pencil },
+              { label: '导出', value: 'export', icon: Download },
+              { label: '删除', value: 'delete', icon: Trash2, danger: true },
+            ]]"
+            placement="bottom-end"
+            class="hidden group-hover:inline-flex"
+            @select="onMenu($event, s)"
+            @click.stop
+          >
+            <template #default>
+              <button class="p-1 text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200" title="更多操作">
+                <MoreHorizontal :size="14" />
+              </button>
+            </template>
+          </Menu>
         </template>
       </div>
     </div>
     <div class="flex items-center gap-2 border-t border-zinc-200 px-3 py-2.5 text-xs text-zinc-500 dark:border-zinc-800">
       <span class="h-2 w-2 rounded-full" :class="statusMap[state.wsStatus].cls" />
       {{ statusMap[state.wsStatus].text }}
+      <div class="flex-1" />
+      <button class="p-1 text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200" title="设置" @click="state.settingsOpen = true">
+        <Settings :size="14" />
+      </button>
     </div>
   </aside>
 </template>

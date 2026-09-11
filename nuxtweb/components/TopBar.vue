@@ -3,12 +3,10 @@ import { Message, Button, Select, Badge, Divider } from 'fuxsto-design'
 import {
   Sun,
   Moon,
-  Settings,
   PanelLeft,
   PanelRight,
   Info,
   FolderOpen,
-  ShieldCheck,
   Bot,
 } from 'lucide-vue-next'
 
@@ -40,7 +38,7 @@ function switchProvider(v: string | number) {
   Message.success(`已切换厂商：${p.name || p.provider}`)
 }
 
-function toggleRight(tab: 'info' | 'files' | 'audit') {
+function toggleRight(tab: 'info' | 'files') {
   state.rightTab = state.rightTab === tab ? '' : tab
 }
 </script>
@@ -72,7 +70,6 @@ function toggleRight(tab: 'info' | 'files' | 'audit') {
       v-for="t in ([
         ['info', Info, '信息'],
         ['files', FolderOpen, '文件'],
-        ['audit', ShieldCheck, '审计'],
       ] as const)"
       :key="t[0]"
       size="sm"

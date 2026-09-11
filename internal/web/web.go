@@ -30,21 +30,6 @@ var nuxtFS embed.FS
 var templates embed.FS
 
 var funcMap = template.FuncMap{
-	// 审计严重级别样式类与中文标签（frag_audit.html 使用）
-	"sevClass": func(s string) string { return "sev " + strings.ToLower(s) },
-	"sevLabel": func(s string) string {
-		switch strings.ToLower(s) {
-		case "critical":
-			return "严重"
-		case "high":
-			return "高"
-		case "medium":
-			return "中"
-		case "low":
-			return "低"
-		}
-		return "未知"
-	},
 	"join": func(sep string, items []string) string { return strings.Join(items, sep) },
 }
 

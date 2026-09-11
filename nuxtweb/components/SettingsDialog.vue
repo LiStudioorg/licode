@@ -83,7 +83,7 @@ const NUM_KEYS = [
   'rag_top_files',
 ] as const
 
-const COMMA_KEYS = ['ask_tools', 'deny_tools', 'audit_scan_dirs', 'audit_exclude'] as const
+const COMMA_KEYS = ['ask_tools', 'deny_tools'] as const
 
 const fieldLabels: Record<string, string> = {
   retry_max: 'LLM 重试次数',
@@ -95,14 +95,10 @@ const fieldLabels: Record<string, string> = {
   rag_source: 'RAG 来源（留空关闭）',
   ask_tools: 'ask 工具（逗号分隔）',
   deny_tools: 'deny 工具（逗号分隔）',
-  audit_scan_dirs: '审计扫描目录（逗号分隔）',
-  audit_exclude: '审计排除正则（逗号分隔）',
   redact_secrets: '敏感信息脱敏',
   sandbox: '沙箱执行（Docker）',
   tool_auto_retry: '工具自动重试',
   rag_enabled: '启用 RAG',
-  audit_enabled: '启用审计',
-  audit_auto_fix: '审计自动修复',
 }
 
 const typeOptions = [
@@ -601,14 +597,6 @@ function save() {
                 <span class="text-xs text-zinc-500">{{ fieldLabels.deny_tools }}</span>
                 <Input :model-value="(local.deny_tools || []).join(',')" @update:model-value="local.deny_tools = splitList($event)" />
               </label>
-              <label class="space-y-1">
-                <span class="text-xs text-zinc-500">{{ fieldLabels.audit_scan_dirs }}</span>
-                <Input :model-value="(local.audit_scan_dirs || []).join(',')" @update:model-value="local.audit_scan_dirs = splitList($event)" />
-              </label>
-              <label class="space-y-1">
-                <span class="text-xs text-zinc-500">{{ fieldLabels.audit_exclude }}</span>
-                <Input :model-value="(local.audit_exclude || []).join(',')" @update:model-value="local.audit_exclude = splitList($event)" />
-              </label>
             </div>
 
             <div class="grid grid-cols-2 gap-2 rounded-xl border border-zinc-200 p-3 dark:border-zinc-800">
@@ -627,14 +615,6 @@ function save() {
               <label class="flex items-center justify-between gap-2 text-sm">
                 <span>{{ fieldLabels.rag_enabled }}</span>
                 <Switch :model-value="!!local.rag_enabled" size="sm" @update:model-value="local.rag_enabled = !!$event" />
-              </label>
-              <label class="flex items-center justify-between gap-2 text-sm">
-                <span>{{ fieldLabels.audit_enabled }}</span>
-                <Switch :model-value="!!local.audit_enabled" size="sm" @update:model-value="local.audit_enabled = !!$event" />
-              </label>
-              <label class="flex items-center justify-between gap-2 text-sm">
-                <span>{{ fieldLabels.audit_auto_fix }}</span>
-                <Switch :model-value="!!local.audit_auto_fix" size="sm" @update:model-value="local.audit_auto_fix = !!$event" />
               </label>
             </div>
 

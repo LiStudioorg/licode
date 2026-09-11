@@ -25,9 +25,6 @@
     <div class="fg"><label>工具自动重试</label><select id="sAutoRetry"><option value="off"{{if not .AutoRetryOn}} selected{{end}}>关闭</option><option value="on"{{if .AutoRetryOn}} selected{{end}}>开启</option></select></div>
     <div class="fg"><label>项目RAG索引</label><select id="sRAG"><option value="off"{{if not .RAGOn}} selected{{end}}>关闭</option><option value="on"{{if .RAGOn}} selected{{end}}>开启</option></select></div>
     <div class="fg"><label>RAG索引目录</label><input id="sRAGSrc" placeholder="默认:启动目录" value="{{.RAGSource}}" /></div>
-    <div class="fg"><label>代码审计</label><select id="sAudit"><option value="on"{{if .AuditOn}} selected{{end}}>开启</option><option value="off"{{if not .AuditOn}} selected{{end}}>关闭</option></select></div>
-    <div class="fg"><label>修复前自动生成预览</label><select id="sAuditFix"><option value="on"{{if .AuditFixOn}} selected{{end}}>开启</option><option value="off"{{if not .AuditFixOn}} selected{{end}}>关闭</option></select></div>
-    <div class="fg"><label>审计排除(正则,逗号分隔)</label><input id="sAuditEx" placeholder="(^|/)vendor/,(^|/)node_modules/" value="{{.AuditExclude}}" /></div>
     <div class="fg"><label>MCP 服务器 (JSON)</label><textarea id="sMCP">{{.MCPJSON}}</textarea></div>
     <div class="fg"><label>多提供商 (JSON)</label><textarea id="sProvs">{{.ProvJSON}}</textarea></div>
   </div>

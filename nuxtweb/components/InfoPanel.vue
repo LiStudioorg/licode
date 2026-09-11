@@ -51,7 +51,7 @@ async function onImport(e: Event) {
 }
 
 const links = [
-  { label: 'GitHub', text: 'li63050a/licode', href: 'https://github.com/li63050a/licode' },
+  { label: 'GitHub', text: 'li63050a6/licode', href: 'https://github.com/li63050a6/licode' },
   { label: 'Gitee', text: 'li63050a/licode', href: 'https://gitee.com/li63050a/licode' },
   { label: 'B 站', text: '小帅5656', href: 'https://b23.tv/nDqj0DT' },
 ]

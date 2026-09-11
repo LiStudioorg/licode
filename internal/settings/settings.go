@@ -115,11 +115,6 @@ type Settings struct {
 	RAGEnabled  bool   `json:"rag_enabled"`   // 索引项目源码并注入上下文
 	RAGSource   string `json:"rag_source"`    // 索引根目录（默认当前工作目录）
 	RAGTopFiles int    `json:"rag_top_files"` // 注入的最大文件数（默认 5）
-	// 代码审计（静态规则 + LLM 深度分析，修复需二次人工确认）
-	AuditEnabled  *bool    `json:"audit_enabled"`   // 是否启用审计（nil=默认开启）
-	AuditAutoFix  *bool    `json:"audit_auto_fix"`  // 修复前自动生成预览（nil=默认开启）
-	AuditScanDirs []string `json:"audit_scan_dirs"` // 扫描目录（相对工作目录，默认 ["."]）
-	AuditExclude  []string `json:"audit_exclude"`   // 排除路径（相对路径正则，默认排除 vendor/node_modules/.git/dist）
 	// DNS 自定义解析配置，用于解决 API 端点域名解析失败或 DNS 污染导致的 connection refused。
 	DNS *dnsclient.Config `json:"dns,omitempty"`
 }
@@ -340,10 +335,6 @@ func (s *Settings) Snapshot() Settings {
 		RAGEnabled:      s.RAGEnabled,
 		RAGSource:       s.RAGSource,
 		RAGTopFiles:     s.RAGTopFiles,
-		AuditEnabled:    s.AuditEnabled,
-		AuditAutoFix:    s.AuditAutoFix,
-		AuditScanDirs:   append([]string{}, s.AuditScanDirs...),
-		AuditExclude:    append([]string{}, s.AuditExclude...),
 	}
 	if s.DNS != nil {
 		servers := make([]dnsclient.Server, len(s.DNS.Servers))
