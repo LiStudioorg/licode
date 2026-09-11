@@ -48,7 +48,9 @@ func (m *Model) View() string {
 	if !m.sidebarVisible() {
 		return main
 	}
-	return lipgloss.JoinHorizontal(lipgloss.Top, m.viewSidebar(), main, m.sidebarRightPad())
+	sidebar := m.viewSidebar()
+	gap := blankLine(2, colorBg)
+	return lipgloss.JoinHorizontal(lipgloss.Top, main, gap, sidebar)
 }
 
 // ── 宽屏侧栏（照抄 opencode：≥121 列显示 42 列侧栏，主区在剩余宽度内布局） ──
@@ -195,17 +197,78 @@ func sidebarRow(text string, style lipgloss.Style) string {
 
 // ── 首页（logo + 居中 Prompt） ──
 
-// "LiCode" 字标：6 个大写字母，每个 3 列宽，Li 用 accent，Code 用正文色
+// "licode" 字标，完全采用 opencode logo 的字形与笔法：
+// "_"= 阴影底空格，"^"= 阴影底上的 ▀；C/O/D/E 直接照抄 opencode 原版，L/I 按同一风格补：
+// L 为左上竖笔，I 为中央竖笔。
 var logoFont = [][]string{
-	{"█  ", "█  ", "█▀▀"}, // L
-	{"▀▀▀", " █ ", "▀▀▀"}, // I
-	{"▀▀▀", "█  ", "▀▀▀"}, // C
-	{"▀▀▀", "█ █", "▀▀▀"}, // O
-	{"▀▀▀", "█ █", "█▀▀"}, // D
-	{"▀▀▀", "█▀▀", "▀▀▀"}, // E
+	{"▀▀▀▀", "▀▀▀▀", "█▀▀▀", "█▀▀█", "█▀▀█", "█▀▀█"}, // L I C O D E
+	{"█___", "▀██▀", "█___", "█__█", "█__█", "█^^^"},
+	{"█▀▀▀", "▀▀▀▀", "▀▀▀▀", "▀▀▀▀", "▀▀▀▀", "▀▀▀▀"},
 }
 
-var logoColors = []string{colorAccent, colorAccent, colorText, colorText, colorText, colorText}
+// logoLeftHalf 左侧字形数（licode 共 6 个，3/3 分半）：左侧用 muted，右侧用 bright+bold（同 opencode logo.left/right）
+const logoLeftHalf = 3
+
+// logoGlyphRow 复刻 opencode logo 的笔触：
+// "_"/" " 字形内空洞 → 阴影背景；"^" → 阴影底上的 ▀；"▄" 等其余笔画 → 前景色。
+func logoGlyphRow(glyph, fg string, bold bool) string {
+	var b strings.Builder
+	for _, ch := range glyph {
+		switch ch {
+		case '_', ' ':
+			b.WriteString(lipgloss.NewStyle().Bold(true).
+				Foreground(lipgloss.Color(fg)).
+				Background(lipgloss.Color(shadowOf(fg))).Render(" "))
+		case '^':
+			b.WriteString(lipgloss.NewStyle().
+				Foreground(lipgloss.Color(fg)).
+				Background(lipgloss.Color(shadowOf(fg))).Render("▀"))
+		default:
+			s := lipgloss.NewStyle().Foreground(lipgloss.Color(fg))
+			if bold {
+				s = s.Bold(true)
+			}
+			b.WriteString(s.Render(string(ch)))
+		}
+	}
+	return b.String()
+}
+
+// logoLine 渲染 logo 第 i 行（i==0 为顶行 ▄ 装饰，同 opencode 右边缘外浮点），
+// 左半字形 muted、右半字形 text+bold，居中于 bodyW。
+func (m *Model) logoLine(i int) []string {
+	w := m.bodyW()
+	if i == 0 {
+		artW := len(logoFont[0])*4 + (len(logoFont[0]) - 1)
+		text := strings.Repeat(" ", artW+1) + logoGlyphRow("▄", colorText, true)
+		pad := max(0, (w-lipgloss.Width(text))/2)
+		tail := max(0, w-pad-lipgloss.Width(text))
+		return []string{
+			lipgloss.NewStyle().Background(lipgloss.Color(colorBg)).
+				Render(strings.Repeat(" ", pad) + text + strings.Repeat(" ", tail)),
+		}
+	}
+	row := i - 1
+	var b strings.Builder
+	for j := range logoFont[row] {
+		if j > 0 {
+			b.WriteString(" ")
+		}
+		bold := j >= logoLeftHalf
+		fg := colorText
+		if !bold {
+			fg = colorMuted
+		}
+		b.WriteString(logoGlyphRow(logoFont[row][j], fg, bold))
+	}
+	text := b.String()
+	pad := max(0, (w-lipgloss.Width(text))/2)
+	tail := max(0, w-pad-lipgloss.Width(text))
+	return []string{
+		lipgloss.NewStyle().Background(lipgloss.Color(colorBg)).
+			Render(strings.Repeat(" ", pad) + text + strings.Repeat(" ", tail)),
+	}
+}
 
 func (m *Model) viewHome() string {
 	w := m.bodyW()
@@ -214,7 +277,8 @@ func (m *Model) viewHome() string {
 	}
 	var lines []string
 
-	content := len(logoFont[0]) + 2 + len(m.promptLines(0)) // logo行 + <height1/> + wrapper paddingTop + Prompt
+	logoRows := len(logoFont) + 1 // 装饰行 + 3 字形行
+	content := logoRows + 2 + len(m.promptLines(0))
 	top := (m.h - content) / 2
 	if top < 0 {
 		top = 0
@@ -222,7 +286,7 @@ func (m *Model) viewHome() string {
 	for i := 0; i < top; i++ {
 		lines = append(lines, blankLine(w, colorBg))
 	}
-	for i := 0; i < len(logoFont[0]); i++ {
+	for i := 0; i < logoRows; i++ {
 		lines = append(lines, m.logoLine(i)...)
 	}
 	lines = append(lines, blankLine(w, colorBg)) // <box height={1}/>
@@ -284,41 +348,6 @@ func centerLine(s string, w int) string {
 	}
 	return lipgloss.NewStyle().Background(lipgloss.Color(colorBg)).Render(strings.Repeat(" ", pad)) + s +
 		lipgloss.NewStyle().Background(lipgloss.Color(colorBg)).Render(strings.Repeat(" ", tail))
-}
-
-func (m *Model) logoLine(i int) []string {
-	var b strings.Builder
-	for j, glyph := range logoFont {
-		if j > 0 {
-			b.WriteString(" ")
-		}
-		b.WriteString(logoGlyphRow(glyph[i], logoColors[j]))
-	}
-	text := b.String()
-	w := m.bodyW()
-	pad := max(0, (w-lipgloss.Width(text))/2)
-	tail := max(0, w-pad-lipgloss.Width(text))
-	return []string{
-		lipgloss.NewStyle().Background(lipgloss.Color(colorBg)).
-			Render(strings.Repeat(" ", pad) + text + strings.Repeat(" ", tail)),
-	}
-}
-
-// logoGlyphRow 复刻 opencode logo 的笔触：字形内空格上阴影色，笔画用前景色
-func logoGlyphRow(glyph, fg string) string {
-	var b strings.Builder
-	for _, ch := range glyph {
-		switch ch {
-		case ' ':
-			b.WriteString(lipgloss.NewStyle().Bold(true).
-				Foreground(lipgloss.Color(fg)).
-				Background(lipgloss.Color(shadowOf(fg))).Render(" "))
-		default:
-			b.WriteString(lipgloss.NewStyle().Bold(true).
-				Foreground(lipgloss.Color(fg)).Render(string(ch)))
-		}
-	}
-	return b.String()
 }
 
 // ── 会话视图 ──

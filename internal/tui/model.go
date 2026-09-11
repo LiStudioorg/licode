@@ -12,7 +12,7 @@ import (
 	"licode/internal/ai"
 )
 
-const Version = "0.0.47"
+const Version = "0.0.48"
 const sidebarW = 42
 
 type lipglossColor = string
@@ -159,12 +159,12 @@ func (m *Model) refreshSessions() {
 }
 
 func (m *Model) sidebarVisible() bool {
-	return m.w > 120
+	return !m.home && m.w > 120
 }
 
 func (m *Model) bodyW() int {
 	if m.sidebarVisible() {
-		return m.w - sidebarW - 4
+		return m.w - sidebarW - 2
 	}
 	return m.w
 }
