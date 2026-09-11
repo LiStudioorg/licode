@@ -37,18 +37,30 @@ type Config struct {
 	Servers []Server `json:"servers"`
 }
 
-// Presets 是常见 DNS 厂商的预设，供前端快速添加。
+// Presets 是常见 DNS 厂商的预设，供前端快速添加。国内厂商优先。
 var Presets = map[string]Server{
+	"alidns":        {Mode: ModeDoH, Server: "https://dns.alidns.com/dns-query"},
+	"alidns-tls":    {Mode: ModeDoT, Server: "223.5.5.5:853"},
+	"dnspod":        {Mode: ModeDoH, Server: "https://doh.pub/dns-query"},
+	"dnspod-tls":    {Mode: ModeDoT, Server: "119.29.29.29:853"},
+	"onedns":        {Mode: ModeDoH, Server: "https://doh.onedns.net/dns-query"},
+	"onedns-tls":    {Mode: ModeDoT, Server: "1.2.4.8:853"},
 	"cloudflare":    {Mode: ModeDoH, Server: "https://1.1.1.1/dns-query"},
 	"cloudflare-tls": {Mode: ModeDoT, Server: "1.1.1.1:853"},
 	"google":        {Mode: ModeDoH, Server: "https://dns.google/dns-query"},
 	"google-tls":    {Mode: ModeDoT, Server: "8.8.8.8:853"},
 	"quad9":         {Mode: ModeDoH, Server: "https://dns.quad9.net/dns-query"},
 	"quad9-tls":     {Mode: ModeDoT, Server: "9.9.9.9:853"},
-	"alidns":        {Mode: ModeDoH, Server: "https://dns.alidns.com/dns-query"},
-	"alidns-tls":    {Mode: ModeDoT, Server: "223.5.5.5:853"},
-	"dnspod":        {Mode: ModeDoH, Server: "https://doh.pub/dns-query"},
 	"opendns":       {Mode: ModeDoH, Server: "https://doh.opendns.com/dns-query"},
+}
+
+// failoverServers 是系统 DNS 解析失败时的内置兜底服务器（国内 DoH 优先）。
+var failoverServers = []Server{
+	{Mode: ModeDoH, Server: "https://dns.alidns.com/dns-query"},
+	{Mode: ModeDoH, Server: "https://doh.pub/dns-query"},
+	{Mode: ModeDoT, Server: "223.5.5.5:853"},
+	{Mode: ModePlain, Server: "223.5.5.5:53"},
+	{Mode: ModePlain, Server: "119.29.29.29:53"},
 }
 
 func (c Config) isCustom() bool {
@@ -236,12 +248,25 @@ func (srv Server) lookup(ctx context.Context, host string, qtype uint16) ([]net.
 
 // LookupIP 解析 host 的 IP 列表。多服务器时并发取最快结果。
 func (c Config) LookupIP(ctx context.Context, host string) ([]net.IP, error) {
-	servers := c.activeServers()
-	if len(servers) == 0 {
-		return systemResolver.LookupIP(ctx, "ip", host)
-	}
 	host = strings.TrimSuffix(host, ".")
+	servers := c.activeServers()
 
+	// 系统默认：先用系统解析，失败自动兜底到 failoverServers。
+	if len(servers) == 0 {
+		ips, err := systemResolver.LookupIP(ctx, "ip", host)
+		if err == nil && len(ips) > 0 {
+			return ips, nil
+		}
+		cfg := Config{Servers: failoverServers}
+		return cfg.lookupAll(ctx, host)
+	}
+
+	return c.lookupAll(ctx, host)
+}
+
+// lookupAll 用已激活的服务器并发解析，返回所有成功 IP。
+func (c Config) lookupAll(ctx context.Context, host string) ([]net.IP, error) {
+	servers := c.activeServers()
 	type result struct {
 		ips []net.IP
 		err error

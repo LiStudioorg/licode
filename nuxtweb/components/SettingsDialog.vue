@@ -11,14 +11,15 @@ const dnsModeOptions = [
 ]
 
 const dnsPresetOptions = [
+  { label: '阿里 DoH', value: 'https://dns.alidns.com/dns-query' },
+  { label: '阿里 DoT', value: '223.5.5.5:853' },
+  { label: 'DNSPod DoH', value: 'https://doh.pub/dns-query' },
+  { label: 'DNSPod DoT', value: '119.29.29.29:853' },
+  { label: 'OneDNS DoH', value: 'https://doh.onedns.net/dns-query' },
   { label: 'Cloudflare DoH', value: 'https://1.1.1.1/dns-query' },
-  { label: 'Cloudflare DoT', value: '1.1.1.1:853' },
   { label: 'Google DoH', value: 'https://dns.google/dns-query' },
-  { label: 'Google DoT', value: '8.8.8.8:853' },
-  { label: '阿里 DNS', value: 'https://dns.alidns.com/dns-query' },
-  { label: 'DNSPod', value: 'https://doh.pub/dns-query' },
-  { label: 'Quad9', value: 'https://dns.quad9.net/dns-query' },
-  { label: 'OpenDNS', value: 'https://doh.opendns.com/dns-query' },
+  { label: 'Quad9 DoH', value: 'https://dns.quad9.net/dns-query' },
+  { label: 'OpenDNS DoH', value: 'https://doh.opendns.com/dns-query' },
 ]
 
 const _newDnsServer = ref('')
@@ -452,7 +453,7 @@ function save() {
                     :model-value="srv.server || ''"
                     size="sm"
                     class="flex-1"
-                    placeholder="https://doh.pub/dns-query 或 8.8.8.8:53"
+                    placeholder="https://dns.alidns.com/dns-query 或 223.5.5.5:53"
                     @update:model-value="srv.server = String($event)"
                   />
                   <Button size="sm" variant="ghost" danger :icon="Trash2" @click="removeDnsServer(i)" />
