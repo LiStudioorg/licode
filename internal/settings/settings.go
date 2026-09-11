@@ -233,6 +233,9 @@ func (s *Settings) NewClient() (ai.LLMClient, error) {
 }
 
 // BuildAgent 根据设置构建一个完整的 Agent（含子代理、Skills、MCP、压缩）。
+// riskyToolDefaults 是默认需要用户确认（ask）的高风险工具名。
+var riskyToolDefaults = []string{"Shell", "Write", "Edit", "Delete", "Move", "WebFetch"}
+
 func (s *Settings) BuildAgent(client ai.LLMClient) *agent.Agent {
 	// 特性1：语义缓存（问题-结果缓存，命中即返回，跳过 LLM 调用）
 	if s.CacheEnabled {
@@ -261,8 +264,12 @@ func (s *Settings) BuildAgent(client ai.LLMClient) *agent.Agent {
 	if s.MaxCtxTokens > 0 {
 		ag.Session.SetMaxTokens(s.MaxCtxTokens)
 	}
-	ag.Permissions = map[string]string{}
-	// 工具规则：tool -> allow/ask/deny（未配置默认为 allow）
+	// 安全默认：先把高风险工具默认设为 "ask"（需用户确认），后面的显式配置可覆盖，
+	// 防止未配置任何工具规则时模型经提示注入自主执行 Shell、改写文件或抓取网页。
+	for _, t := range riskyToolDefaults {
+		ag.Permissions[t] = "ask"
+	}
+	// 工具规则：tool -> allow/ask/deny（优先级高于安全默认，未配置仍默认为 ask）
 	for tool, mode := range s.ToolRules {
 		if mode == "deny" || mode == "ask" || mode == "allow" {
 			ag.Permissions[tool] = mode

@@ -78,6 +78,19 @@ func addToZip(w *zip.Writer, rel string) error {
 	return err
 }
 
+// allowedImportPath 限定导入只覆盖已知子目录，防止 zip 内夹带 session.key 等敏感文件。
+func allowedImportPath(rel string) bool {
+	if rel == "config.json" || rel == "system-prompt.md" {
+		return true
+	}
+	for _, p := range []string{"skills/", "md-prompt/", "sessions/"} {
+		if strings.HasPrefix(rel, p) {
+			return true
+		}
+	}
+	return false
+}
+
 // Import 从 zip 字节恢复配置/会话/Skills。dest 为目标根目录（默认 ~/.licode）。
 func Import(data []byte, dest string) error {
 	if dest == "" {
@@ -91,6 +104,9 @@ func Import(data []byte, dest string) error {
 		clean := filepath.Clean(f.Name)
 		if strings.Contains(clean, "..") || filepath.IsAbs(clean) {
 			return fmt.Errorf("非法路径 %q", f.Name)
+		}
+		if !allowedImportPath(clean) {
+			return fmt.Errorf("不允许导入的路径 %q", f.Name)
 		}
 		target := filepath.Join(dest, clean)
 		rc, err := f.Open()

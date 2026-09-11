@@ -14,6 +14,11 @@ var testPage = `<html><head><title>Licode 自建搜索测试页</title></head>
 <ul><li>第一项：goroutine channel</li><li>第二项：BM25 打分</li></ul></body></html>`
 
 func TestServiceRoundtrip(t *testing.T) {
+	// 本测试用 127.0.0.1 的 httptest 服务，临时关闭私网拦截。
+	old := blockPrivateHosts
+	blockPrivateHosts = false
+	defer func() { blockPrivateHosts = old }()
+
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(testPage))
 	}))
@@ -78,16 +83,34 @@ func TestServiceRoundtrip(t *testing.T) {
 }
 
 func TestValidateURL(t *testing.T) {
-	good := []string{"https://example.com/a?b=1", "http://localhost:8000/x"}
+	good := []string{"https://example.com/a?b=1"}
 	for _, u := range good {
 		if _, err := ValidateURL(u); err != nil {
 			t.Errorf("%q 应为合法：%v", u, err)
 		}
 	}
-	bad := []string{"", "ftp://x.com/a", "javascript:alert(1)", "/relative/path", "not-a-url"}
+	bad := []string{"", "ftp://x.com/a", "javascript:alert(1)", "/relative/path", "not-a-url", "http://localhost:8000/x"}
 	for _, u := range bad {
 		if _, err := ValidateURL(u); err == nil {
 			t.Errorf("%q 应判为非法", u)
 		}
+	}
+}
+
+// TestBlockPrivateHosts 验证默认开启的 SSRF 私网拦截生效。
+func TestBlockPrivateHosts(t *testing.T) {
+	for _, u := range []string{
+		"http://127.0.0.1/x",
+		"http://localhost/x",
+		"http://169.254.169.254/latest/meta-data",
+		"http://10.0.0.1/x",
+		"http://192.168.1.1/x",
+	} {
+		if _, err := ValidateURL(u); err == nil {
+			t.Errorf("%q 应被私网拦截拒绝", u)
+		}
+	}
+	if _, err := ValidateURL("https://example.com/x"); err != nil {
+		t.Errorf("公网域名不应被拦截：%v", err)
 	}
 }

@@ -531,6 +531,13 @@ var dangerousPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`>\s*/dev/sd`),
 	regexp.MustCompile(`mkfs\s+`),
 	regexp.MustCompile(`dd\s+.*of=`),
+	// 常见“下载即执行”与越权提权写法，作为黑名单纵深防御（沙箱仍为主防线）。
+	regexp.MustCompile(`\bcurl\b[^|]*\|[^|]*(ba)?sh\b`),
+	regexp.MustCompile(`\bwget\b[^|]*\|[^|]*(ba)?sh\b`),
+	regexp.MustCompile(`\beval\s+\$\(`),
+	regexp.MustCompile(`\bchmod\s+(-R\s+)?777\b`),
+	regexp.MustCompile(`\bsudo\s+i?ptables\b`),
+	regexp.MustCompile(`\bkill\b.*\b-9\s+1`),
 }
 
 func safeCommand(command string) bool {

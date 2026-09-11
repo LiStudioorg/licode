@@ -7,12 +7,17 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 
 	"licode/internal/session"
 	"licode/internal/settings"
 )
+
+// sessionIDPattern 限定会话 ID 为 32 位十六进制（session.genID 的格式），
+// 防止通过 ../ 进行路径穿越读取任意文件。
+var sessionIDPattern = regexp.MustCompile(`^[0-9a-f]{32}$`)
 
 // handleSessionExport 导出一个会话为 Markdown 文件。
 func handleSessionExport(w http.ResponseWriter, r *http.Request) {
@@ -21,7 +26,16 @@ func handleSessionExport(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "缺少 session_id"})
 		return
 	}
-	s, err := session.LoadSessionFile(filepath.Join(settings.SessionsDir(), sid+".json"))
+	if !sessionIDPattern.MatchString(sid) {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "session_id 非法"})
+		return
+	}
+	path := filepath.Join(settings.SessionsDir(), sid+".json")
+	if rel, err := filepath.Rel(settings.SessionsDir(), path); err != nil || strings.HasPrefix(rel, "..") {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "session_id 非法"})
+		return
+	}
+	s, err := session.LoadSessionFile(path)
 	if err != nil {
 		writeJSON(w, http.StatusNotFound, map[string]any{"error": err.Error()})
 		return

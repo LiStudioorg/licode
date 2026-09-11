@@ -30,11 +30,6 @@
 200 {"version":"0.0.0.2","counter":2}
 ```
 
-### `GET /api/nodejs`
-```
-200 {"node":"v22.…","npx":"…","ok":true}
-```
-
 ## 2. 文件与工作目录（`cmd/files.go`）
 
 ### `GET /api/files?path=` 列目录

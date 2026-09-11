@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -85,6 +86,10 @@ func NewService(store *Store, engines []string) *Service {
 		HTTP: &http.Client{Timeout: FetchTimeout, CheckRedirect: func(r *http.Request, via []*http.Request) error {
 			if len(via) >= 5 {
 				return errors.New("重定向过多")
+			}
+			// 重定向目标同样要过一遍 scheme / 私网地址校验，防 SSRF 绕过。
+			if _, err := validateURL(r.URL.String()); err != nil {
+				return err
 			}
 			return nil
 		}},
@@ -189,5 +194,33 @@ func validateURL(raw string) (string, error) {
 	if u.Scheme != "http" && u.Scheme != "https" {
 		return "", errors.New("仅支持 http/https")
 	}
+	if blockPrivateHosts {
+		host := u.Hostname()
+		if host == "" {
+			return "", errors.New("URL 无效")
+		}
+		ips, err := net.LookupIP(host)
+		if err != nil || len(ips) == 0 {
+			return "", errors.New("无法解析域名")
+		}
+		for _, ip := range ips {
+			if isBlockedIP(ip) {
+				return "", errors.New("不允许访问内网/回环/保留地址")
+			}
+		}
+	}
 	return u.String(), nil
+}
+
+// blockPrivateHosts 置 true 时拒绝回环/私网/链路本地地址（SSRF 防护）。
+// 测试内网 httptest 场景可临时设为 false。
+var blockPrivateHosts = true
+
+// isBlockedIP 判断 IP 是否属于内网/回环/链路本地/保留地址。
+func isBlockedIP(ip net.IP) bool {
+	if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() ||
+		ip.IsLinkLocalMulticast() || ip.IsUnspecified() || ip.IsMulticast() {
+		return true
+	}
+	return false
 }

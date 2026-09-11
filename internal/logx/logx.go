@@ -65,9 +65,9 @@ func AgentStart(traceID, agent string) {
 	emit(entry{Lv: "info", Msg: "agent_start", TraceID: traceID, Agent: agent})
 }
 
-// ToolCall 记录一次工具调用（入参与输出）。
+// ToolCall 记录一次工具调用（入参与输出，均做截断与脱敏）。
 func ToolCall(traceID, tool, argsRaw, out string) {
-	emit(entry{Lv: "info", Msg: "tool_call", TraceID: traceID, Tool: tool, Args: argsRaw, Out: truncate(out)})
+	emit(entry{Lv: "info", Msg: "tool_call", TraceID: traceID, Tool: tool, Args: truncate(argsRaw), Out: truncate(out)})
 }
 
 // AgentError 记录 agent 运行错误。

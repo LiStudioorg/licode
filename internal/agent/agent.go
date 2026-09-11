@@ -318,7 +318,11 @@ func (a *Agent) RunWithAttachments(ctx context.Context, input string, attachment
 			if a.RedactSecrets {
 				out = RedactSecrets(out)
 			}
-			logx.ToolCall(a.TraceID, tc.Function.Name, tc.Function.Arguments, out)
+			args := tc.Function.Arguments
+			if a.RedactSecrets {
+				args = RedactSecrets(args)
+			}
+			logx.ToolCall(a.TraceID, tc.Function.Name, args, out)
 			onEvent(Event{Type: EventToolDone, ToolName: tc.Function.Name, ToolOut: out})
 			a.Session.Add(ai.Message{Role: ai.RoleTool, ToolCallID: tc.ID, ToolName: tc.Function.Name, Content: out})
 		}
@@ -354,8 +358,10 @@ func (a *Agent) runTool(ctx context.Context, tc ai.ToolCall, onEvent func(Event)
 			if !ok {
 				return "用户拒绝执行工具 " + tc.Function.Name, nil
 			}
+		} else {
+			// Ask 未接线时按拒绝处理，避免“ask”静默放行高风险工具。
+			return "已拒绝执行 " + tc.Function.Name + "（需人工确认，但当前无确认通道）", nil
 		}
-		// Ask 未设置时视为允许。
 	}
 	var out string
 	var terr error

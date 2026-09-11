@@ -6,11 +6,13 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"licode/internal/settings"
@@ -25,15 +27,77 @@ const (
 	SessionCookie   = "licode_auth"
 	sessionLifetime = 7 * 24 * time.Hour
 	csrfCookie      = "licode_csrf"
-	csrfHeader      = "X-CSRF-Token"
 )
 
 // authState 是登录认证状态（基于会话 Cookie + HMAC 签名）。
 type authState struct {
-	user    string
-	pass    string
-	enabled bool
-	secret  []byte
+	user     string
+	pass     string
+	enabled  bool
+	secret   []byte
+	throttle *loginThrottle
+}
+
+// 登录限流：单 IP 连续失败上限与锁定窗口，降低暴力破解风险。
+const (
+	maxLoginFails = 8
+	lockWindow    = 5 * time.Minute
+)
+
+type failEntry struct {
+	count int
+	until time.Time
+}
+
+type loginThrottle struct {
+	mu    sync.Mutex
+	fails map[string]*failEntry
+}
+
+func newLoginThrottle() *loginThrottle {
+	return &loginThrottle{fails: map[string]*failEntry{}}
+}
+
+func (t *loginThrottle) allowed(ip string) bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	e := t.fails[ip]
+	if e == nil {
+		return true
+	}
+	if time.Now().After(e.until) {
+		delete(t.fails, ip)
+		return true
+	}
+	return e.count < maxLoginFails
+}
+
+func (t *loginThrottle) fail(ip string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	e := t.fails[ip]
+	if e == nil {
+		e = &failEntry{}
+		t.fails[ip] = e
+	}
+	e.count++
+	if e.count >= maxLoginFails {
+		e.until = time.Now().Add(lockWindow)
+	}
+}
+
+func (t *loginThrottle) success(ip string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	delete(t.fails, ip)
+}
+
+func clientIP(r *http.Request) string {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr
+	}
+	return host
 }
 
 // ResolveAuth 解析用户名与密码：环境变量优先，未设置时用户名默认 licode。
@@ -54,7 +118,7 @@ func ResolveAuth(username, password string) (string, string, bool) {
 // newAuthState 构造认证状态。HMAC 密钥持久化在 ~/.licode/session.key，
 // 保证会话 cookie 在服务器重启后仍然有效（自动登录）。
 func newAuthState(user, pass string, enabled bool) *authState {
-	return &authState{user: user, pass: pass, enabled: enabled, secret: loadSecret()}
+	return &authState{user: user, pass: pass, enabled: enabled, secret: loadSecret(), throttle: newLoginThrottle()}
 }
 
 // loadSecret 读取或生成持久化会话密钥。
@@ -105,13 +169,14 @@ func (a *authState) verifyToken(token string) (string, bool) {
 	return user, true
 }
 
-func (a *authState) setSession(w http.ResponseWriter, user string) {
+func (a *authState) setSession(w http.ResponseWriter, user string, secure bool) {
 	tok := a.issueToken(user, time.Now().Add(sessionLifetime))
 	http.SetCookie(w, &http.Cookie{
 		Name:     SessionCookie,
 		Value:    tok,
 		Path:     "/",
 		HttpOnly: true,
+		Secure:   secure,
 		SameSite: http.SameSiteLaxMode,
 		MaxAge:   int(sessionLifetime.Seconds()),
 	})
@@ -176,13 +241,20 @@ func (a *authState) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if r.Method == http.MethodPost {
+		ip := clientIP(r)
+		if !a.throttle.allowed(ip) {
+			http.Redirect(w, r, "/login?error=rate", http.StatusFound)
+			return
+		}
 		user := r.FormValue("username")
 		pass := r.FormValue("password")
 		if user == a.user && pass == a.pass {
-			a.setSession(w, user)
+			a.throttle.success(ip)
+			a.setSession(w, user, r.TLS != nil)
 			http.Redirect(w, r, "/", http.StatusFound)
 			return
 		}
+		a.throttle.fail(ip)
 		http.Redirect(w, r, "/login?error=1", http.StatusFound)
 		return
 	}
@@ -213,27 +285,6 @@ func setCSRFCookie(w http.ResponseWriter, token string) {
 		HttpOnly: false,
 		SameSite: http.SameSiteStrictMode,
 		MaxAge:   int(sessionLifetime.Seconds()),
-	})
-}
-
-func validateCSRF(r *http.Request) bool {
-	c, err := r.Cookie(csrfCookie)
-	if err != nil {
-		return false
-	}
-	token := r.Header.Get(csrfHeader)
-	if token == "" {
-		token = r.FormValue("csrf_token")
-	}
-	return token != "" && token == c.Value
-}
-
-func clearCSRF(w http.ResponseWriter) {
-	http.SetCookie(w, &http.Cookie{
-		Name:   csrfCookie,
-		Value:  "",
-		Path:   "/",
-		MaxAge: -1,
 	})
 }
 

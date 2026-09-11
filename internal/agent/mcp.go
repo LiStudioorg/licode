@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -346,13 +347,17 @@ type httpConn struct {
 }
 
 func newHTTPConn(s MCPServer) (*httpConn, error) {
-	url := strings.TrimSpace(s.URL)
-	if url == "" {
+	raw := strings.TrimSpace(s.URL)
+	if raw == "" {
 		return nil, fmt.Errorf("url 为空")
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
+		return nil, fmt.Errorf("仅支持 http/https 的 mcp 服务地址")
 	}
 	return &httpConn{
 		server:  s,
-		baseURL: url,
+		baseURL: raw,
 		client:  &http.Client{Timeout: 60 * time.Second},
 	}, nil
 }

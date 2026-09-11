@@ -7,9 +7,10 @@ import (
 	"io"
 	"io/fs"
 	"log"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
-	"os/exec"
 	"os/signal"
 	"strings"
 	"sync"
@@ -518,21 +519,6 @@ func runServe(opts *ServeOptions) error {
 			"default_username": DefaultUsername,
 		})
 	})
-	mux.HandleFunc("/api/nodejs", func(w http.ResponseWriter, r *http.Request) {
-		if !auth.require(w, r) {
-			return
-		}
-		out := map[string]any{"node": "", "npx": "", "ok": false}
-		if b, err := exec.Command("node", "--version").Output(); err == nil {
-			out["node"] = strings.TrimSpace(string(b))
-		}
-		// npx 依赖 node；检查时报错面给出的信息更友好。
-		if b, err := exec.Command("npx", "--version").Output(); err == nil {
-			out["npx"] = strings.TrimSpace(string(b))
-		}
-		out["ok"] = out["node"] != ""
-		writeJSON(w, http.StatusOK, out)
-	})
 	mux.Handle("/_nuxt/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Nuxt 静态产物资源（公开）：登录页（SPA）也需要加载，故不要求认证。
 		nuxt := web.NuxtFS()
@@ -578,14 +564,20 @@ func runServe(opts *ServeOptions) error {
 		hub.ServeWS(w, r)
 	})
 
-	srv := &http.Server{
-		Addr:              listenAddr(opts),
-		Handler:           mux,
-		ReadHeaderTimeout: 10 * time.Second,
-	}
-
+	// 安全中间件：跨站请求同源校验 + 基础安全响应头。
 	host := listenAddr(opts)
 	useTLS := opts.HTTPS || (opts.TLSCert != "" && opts.TLSKey != "")
+	var handler http.Handler = mux
+	handler = sameOriginGuard(handler)
+	handler = securityHeaders(handler, useTLS)
+
+	srv := &http.Server{
+		Addr:              listenAddr(opts),
+		Handler:           handler,
+		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       2 * time.Minute,
+	}
+
 	scheme := "http"
 	if useTLS {
 		scheme = "https"
@@ -857,6 +849,60 @@ func serveNuxtFile(w http.ResponseWriter, r *http.Request, nuxt fs.FS, name stri
 		w.Header().Set("Cache-Control", "public, max-age=604800")
 	}
 	http.ServeFileFS(w, r, nuxt, name)
+}
+
+// isUnsafeMethod 判断是否为写请求方法（GET/HEAD/OPTIONS 之外）。
+func isUnsafeMethod(m string) bool {
+	switch m {
+	case http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete:
+		return true
+	}
+	return false
+}
+
+// sameOriginGuard 对写请求做同源校验：若请求带 Origin 头且与 Host 不符则拒绝，
+// 防止跨站伪造请求访问带 Cookie 的 /api/* 写接口。无 Origin（curl/脚本）或同源放行。
+func sameOriginGuard(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if isUnsafeMethod(r.Method) && strings.HasPrefix(r.URL.Path, "/api/") {
+			if o := r.Header.Get("Origin"); o != "" && !originMatchesHost(o, r.Host) {
+				w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+				w.WriteHeader(http.StatusForbidden)
+				_, _ = w.Write([]byte("403 跨站请求已被拒绝"))
+				return
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func originMatchesHost(origin, host string) bool {
+	ou, err := url.Parse(origin)
+	if err != nil || ou.Host == "" {
+		return false
+	}
+	if strings.EqualFold(ou.Host, host) {
+		return true
+	}
+	// 兼容 Host 带/不带默认端口的差异。
+	h := host
+	if hh, _, e := net.SplitHostPort(host); e == nil {
+		h = hh
+	}
+	return strings.EqualFold(ou.Hostname(), h)
+}
+
+// securityHeaders 追加基础安全响应头。
+func securityHeaders(next http.Handler, tls bool) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("X-Frame-Options", "DENY")
+		w.Header().Set("Referrer-Policy", "no-referrer")
+		if tls {
+			w.Header().Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 func mapEventType(t agent.EventType) string {
