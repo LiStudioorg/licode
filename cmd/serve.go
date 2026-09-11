@@ -45,23 +45,28 @@ type ServeOptions struct {
 	ConfigPath  string
 }
 
-// NewServeCommand 返回根命令（licode 直接运行即启动服务器）。
-func NewServeCommand() *cobra.Command { return newServeCmd() }
+// NewRootCommand 返回根命令：licode 直接运行即启动 Web 服务器。
+func NewRootCommand() *cobra.Command {
+	root := newServeCmd()
+	root.Use = "licode"
+	root.Short = "AI 编程助手（Web 服务器，licode 直接运行即启动）"
+	return root
+}
 
 func newServeCmd() *cobra.Command {
 	opts := &ServeOptions{}
 	c := &cobra.Command{
 		Use:   "web",
 		Short: "AI 编程助手（Web 界面）",
-		Long: `licode web —— 启动 Web 服务器。
+		Long: `licode 直接运行即启动 Web 服务器。
 
 启动 Web 服务器，浏览器访问 http://<host>:<port> 即可使用，例如：
-    ./licode web --host 0.0.0.0 --port 8080
-    ./licode web --password 你的密码            （设置后启用登录，默认用户名 licode）
+    licode --host 0.0.0.0 --port 8080
+    licode --password 你的密码                （设置后启用登录，默认用户名 licode）
 
 浏览器访问 http://<host>:<port> 即可使用，支持手机/电脑。
 所有 AI 推理都在本服务器执行。设置可在网页端实时修改并写回
-~/.licode/config.json，无需重启。`,
+~/.licode/config.toml，无需重启。`,
 		Args: cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			// 配置文件：默认 ~/.licode/config.toml；用 -c 指定其他路径
@@ -293,35 +298,35 @@ func runServe(opts *ServeOptions) error {
 					ch <- msg.AskApprove
 				}
 
-case websocket.TypeMessage:
-			if msg.Content == "/clear" {
-				cs.sessions.Current().Clear()
-				c.SendEvent(websocket.ServerEvent{Type: websocket.EvtDone})
-				return
-			}
-			cs.mu.Lock()
-			if cs.busy {
-				cs.mu.Unlock()
-				c.SendEvent(websocket.ServerEvent{Type: websocket.EvtError, Error: "上一条消息仍在处理中，请稍候"})
-				return
-			}
-			cs.busy = true
-			msgCtx, msgCancel := context.WithCancel(ctx)
-			cs.interruptCancel = msgCancel
-			cs.mu.Unlock()
-			defer func() {
+			case websocket.TypeMessage:
+				if msg.Content == "/clear" {
+					cs.sessions.Current().Clear()
+					c.SendEvent(websocket.ServerEvent{Type: websocket.EvtDone})
+					return
+				}
 				cs.mu.Lock()
-				cs.busy = false
-				cs.interruptCancel = nil
+				if cs.busy {
+					cs.mu.Unlock()
+					c.SendEvent(websocket.ServerEvent{Type: websocket.EvtError, Error: "上一条消息仍在处理中，请稍候"})
+					return
+				}
+				cs.busy = true
+				msgCtx, msgCancel := context.WithCancel(ctx)
+				cs.interruptCancel = msgCancel
 				cs.mu.Unlock()
-				msgCancel()
-			}()
-			atts := make([]ai.Attachment, 0, len(msg.Attachments))
-			for _, a := range msg.Attachments {
-				atts = append(atts, ai.Attachment{Type: a.Type, MIMEType: a.MIMEType, Data: a.Data, Filename: a.Filename})
-			}
-			runServerAgentWithAttachments(msgCtx, st, cs, c, msg.Content, msg.System, atts)
-			_ = cs.sessions.SaveAll()
+				defer func() {
+					cs.mu.Lock()
+					cs.busy = false
+					cs.interruptCancel = nil
+					cs.mu.Unlock()
+					msgCancel()
+				}()
+				atts := make([]ai.Attachment, 0, len(msg.Attachments))
+				for _, a := range msg.Attachments {
+					atts = append(atts, ai.Attachment{Type: a.Type, MIMEType: a.MIMEType, Data: a.Data, Filename: a.Filename})
+				}
+				runServerAgentWithAttachments(msgCtx, st, cs, c, msg.Content, msg.System, atts)
+				_ = cs.sessions.SaveAll()
 
 			case websocket.TypeInterrupt:
 				cs.mu.Lock()
