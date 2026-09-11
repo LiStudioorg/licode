@@ -10,20 +10,7 @@ const dnsModeOptions = [
   { label: 'DoH (HTTPS)', value: 'doh' },
 ]
 
-const dnsPresetOptions = [
-  { label: '阿里 DoH', value: 'https://dns.alidns.com/dns-query' },
-  { label: '阿里 DoT', value: '223.5.5.5:853' },
-  { label: 'DNSPod DoH', value: 'https://doh.pub/dns-query' },
-  { label: 'DNSPod DoT', value: '119.29.29.29:853' },
-  { label: 'OneDNS DoH', value: 'https://doh.onedns.net/dns-query' },
-  { label: 'Cloudflare DoH', value: 'https://1.1.1.1/dns-query' },
-  { label: 'Google DoH', value: 'https://dns.google/dns-query' },
-  { label: 'Quad9 DoH', value: 'https://dns.quad9.net/dns-query' },
-  { label: 'OpenDNS DoH', value: 'https://doh.opendns.com/dns-query' },
-]
-
 const _newDnsServer = ref('')
-const dnsPreset = ref('')
 
 function ensureDns() {
   if (!local.value.dns) local.value.dns = {}
@@ -41,12 +28,6 @@ function addDnsServer() {
 
 function removeDnsServer(i: number) {
   if (local.value.dns?.servers) local.value.dns.servers.splice(i, 1)
-}
-
-function applyDnsPreset(url: string) {
-  if (!url) return
-  _newDnsServer.value = url
-  dnsPreset.value = ''
 }
 
 type ProviderRow = ProviderConfig & { _newModel?: string }
@@ -459,26 +440,19 @@ function save() {
                   <Button size="sm" variant="ghost" danger :icon="Trash2" @click="removeDnsServer(i)" />
                 </div>
                 <div class="flex items-center gap-2">
-                  <Select
-                    :model-value="dnsPreset"
-                    size="sm"
-                    class="w-28"
-                    :options="dnsPresetOptions"
-                    placeholder="预设厂商"
-                    @update:model-value="applyDnsPreset(String($event))"
-                  />
                   <Input
                     v-model="_newDnsServer"
                     size="sm"
                     class="flex-1"
-                    placeholder="自定义服务器（回车添加）"
+                    placeholder="自定义服务器（回车添加，如 223.5.5.5:53）"
                     @keydown.enter.prevent="addDnsServer"
                   />
                   <Button size="sm" variant="outline" :icon="Plus" @click="addDnsServer">添加</Button>
                 </div>
               </div>
               <p class="mt-1 text-[10px] text-zinc-400">
-                system 系统默认 · plain 普通 DNS (53) · dot DNS over TLS (853) · doh DNS over HTTPS
+                system 系统默认 · plain 普通 DNS (53) · dot DNS over TLS (853) · doh DNS over HTTPS ·
+                留空自动兜底全国内 DoH/DoT
               </p>
             </div>
           </template>
