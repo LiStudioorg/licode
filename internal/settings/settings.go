@@ -5,7 +5,9 @@ package settings
 import (
 	"context"
 	"encoding/json"
+	"runtime"
 	"strings"
+	"time"
 
 	"licode/internal/agent"
 	"licode/internal/ai"
@@ -241,7 +243,19 @@ func (s *Settings) BuildAgent(client ai.LLMClient) *agent.Agent {
 	if s.CacheEnabled {
 		client = ai.CacheDecorator(client, ai.NewCache(CacheDir(), s.CacheTTL))
 	}
-	ag := agent.NewAgent(client, agent.DefaultMainPrompt)
+	// 主提示词注入运行时变量：工作目录、操作系统、日期、模型名/ID。
+	// 模型名来自激活厂商配置（切换模型时提示词自动跟随）；provider 名作为可读名。
+	pc := s.ActiveProvider()
+	modelName := pc.Model
+	if modelName == "" {
+		modelName = client.Model()
+	}
+	modelID := pc.Provider + "/" + modelName
+	if pc.Provider == "" {
+		modelID = modelName
+	}
+	prompt := agent.BuildMainPrompt(BaseDir(), runtime.GOOS, time.Now().Format("2006-01-02"), modelName, modelID)
+	ag := agent.NewAgent(client, prompt)
 	// 特性6：把 fsnotify 热加载的外部命令工具并入当前 Agent（动态增/删）。
 	ag.Tools.MergeFrom(agent.ExternalTools)
 	// 联网搜索：WebSearch（多引擎合成）+ WebFetch（抓单页并收录本地库）
