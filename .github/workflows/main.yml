@@ -1,0 +1,34 @@
+name: AI Co-Author Blocker
+
+on: [push, pull_request]
+
+jobs:
+  block-ai-authors:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Reject AI co-author trailers
+        run: |
+          COMMITS=$(git log --format=%B ${{ github.event.before }}..${{ github.sha }})
+          
+          if ! echo "$COMMITS" | grep -qi "Co-Authored-By:"; then
+            echo "✅ 没有共同作者署名，检查通过。"
+            exit 0
+          fi
+
+          AI_BLACKLIST="Claude|Anthropic|Copilot|Cursor|ChatGPT|OpenAI|GPT-4|GPT-3|Gemini|Codeium|Tabnine|Bard|Trae|Trae AI|Codex|Devin|Perplexity"
+          
+          INVALID=$(echo "$COMMITS" | grep -Ei "Co-Authored-By:.*($AI_BLACKLIST)")
+          
+          if [ -n "$INVALID" ]; then
+            echo "❌ 拦截成功：检测到 AI 共同作者署名！"
+            echo "违规内容："
+            echo "$INVALID"
+            exit 1
+          fi
+          
+          echo "✅ 共同作者中没有 AI 署名，检查通过。"
