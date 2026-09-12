@@ -136,7 +136,7 @@ func toGeminiContent(m Message) geminiContent {
 			parts = append(parts, geminiPart{Text: m.Content})
 		}
 		for _, att := range m.Attachments {
-			if att.Type == "image" {
+			if att.Type == "image" || strings.HasPrefix(att.MIMEType, "video/") {
 				parts = append(parts, geminiPart{InlineDate: map[string]any{
 					"mime_type": att.MIMEType,
 					"data":      att.Data,

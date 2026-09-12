@@ -99,9 +99,13 @@ func toAnthropicMsg(m Message) anthropicMsg {
 			content = append(content, anthropicContent{Type: "text", Text: m.Content})
 		}
 		for _, att := range m.Attachments {
-			if att.Type == "image" {
+			if att.Type == "image" || strings.HasPrefix(att.MIMEType, "video/") {
+				attType := "image"
+				if strings.HasPrefix(att.MIMEType, "video/") {
+					attType = "video"
+				}
 				content = append(content, anthropicContent{
-					Type: "image",
+					Type: attType,
 					Source: map[string]any{
 						"type":       "base64",
 						"media_type": att.MIMEType,

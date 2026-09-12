@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Message, Button, Select, Badge, Divider } from 'fuxsto-design'
+import { Message, Button, Badge, Divider } from 'fuxsto-design'
 import {
   Sun,
   Moon,
@@ -13,30 +13,6 @@ import {
 const licode = useLicode()
 const { state } = licode
 const { mode, toggleTheme } = useTheme()
-
-const providerOptions = computed(() => {
-  const ps = state.settings?.providers || []
-  if (!ps.length) return []
-  return ps.map((p) => ({
-    label: p.name || p.provider,
-    value: p.provider,
-  }))
-})
-
-function switchProvider(v: string | number) {
-  const s = state.settings
-  if (!s) return
-  const p = (s.providers || []).find((x) => x.provider === String(v))
-  if (!p) return
-  licode.saveSettings({
-    ...s,
-    provider: p.provider,
-    base_url: p.base_url ?? '',
-    api_key: p.api_key ?? '',
-    model: p.model || s.model || '',
-  })
-  Message.success(`已切换厂商：${p.name || p.provider}`)
-}
 
 function toggleRight(tab: 'info' | 'files') {
   state.rightTab = state.rightTab === tab ? '' : tab
@@ -58,14 +34,6 @@ function toggleRight(tab: 'info' | 'files') {
       {{ state.settings.model }}
     </Badge>
     <div class="min-w-0 flex-1" />
-    <Select
-      v-if="providerOptions.length"
-      :model-value="state.settings?.provider || ''"
-      :options="providerOptions"
-      size="sm"
-      class="w-36"
-      @update:model-value="switchProvider"
-    />
     <Button
       v-for="t in ([
         ['info', Info, '信息'],

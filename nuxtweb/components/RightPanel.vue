@@ -7,7 +7,6 @@ const { state } = useLicode()
 const tabs = [
   { label: '信息', value: 'info' },
   { label: '文件', value: 'files' },
-  { label: '搜索', value: 'search' },
 ]
 </script>
 
@@ -31,7 +30,6 @@ const tabs = [
       <div class="min-h-0 flex-1 overflow-y-auto">
         <InfoPanel v-if="state.rightTab === 'info'" />
         <FilesPanel v-else-if="state.rightTab === 'files'" />
-        <SearchPanel v-else-if="state.rightTab === 'search'" />
       </div>
     </template>
   </aside>

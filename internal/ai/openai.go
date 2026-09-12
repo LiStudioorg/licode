@@ -114,14 +114,22 @@ func (p *OpenAIProvider) buildBody(req ChatRequest, stream bool) ([]byte, error)
 				parts = append(parts, map[string]any{"type": "text", "text": m.Content})
 			}
 			for _, att := range m.Attachments {
-				if att.Type == "image" {
+				switch {
+				case att.Type == "image":
 					parts = append(parts, map[string]any{
 						"type": "image_url",
 						"image_url": map[string]any{
 							"url": "data:" + att.MIMEType + ";base64," + att.Data,
 						},
 					})
-				} else {
+				case strings.HasPrefix(att.MIMEType, "video/"):
+					parts = append(parts, map[string]any{
+						"type": "video_url",
+						"video_url": map[string]any{
+							"url": "data:" + att.MIMEType + ";base64," + att.Data,
+						},
+					})
+				default:
 					parts = append(parts, map[string]any{
 						"type": "text",
 						"text": "[文件: " + att.Filename + "]\n" + att.Data,

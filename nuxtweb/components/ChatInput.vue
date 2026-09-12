@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { SendHorizontal, Square, GitBranch, Eraser, Paperclip, X, Image, Plus } from 'lucide-vue-next'
-import { Dialog, Button } from 'fuxsto-design'
+import { SendHorizontal, Square, GitBranch, Eraser, X, Image, Plus, Video, Paperclip } from 'lucide-vue-next'
+import { Dialog, Button, Select, Menu, Message } from 'fuxsto-design'
 import { ref, nextTick, computed } from 'vue'
 import type { Attachment } from '~/composables/useLicode'
 
@@ -9,16 +9,63 @@ const { state } = licode
 const input = ref('')
 const taRef = ref<HTMLTextAreaElement | null>(null)
 const fileInput = ref<HTMLInputElement | null>(null)
+const acceptType = ref('')
 const attachments = ref<Attachment[]>([])
 const dragOver = ref(false)
 const showSlashMenu = ref(false)
 const slashMenuIndex = ref(0)
 
+// 模型选择：厂商 + 当前厂商可用模型，位于输入框上方。
+const providerOptions = computed(() =>
+  (state.settings?.providers || []).map((p) => ({ label: p.name || p.provider, value: p.provider })),
+)
+const modelOptions = computed(() => {
+  const s = state.settings
+  const p = (s?.providers || []).find((x) => x.provider === s?.provider)
+  if (!p) return s?.model ? [{ label: s.model, value: s.model }] : []
+  const set = new Set<string>(p.models || [])
+  if (p.model) set.add(p.model)
+  return [...set].map((m) => ({ label: m, value: m }))
+})
+
+function switchProvider(v: string | number) {
+  const s = state.settings
+  if (!s) return
+  const p = (s.providers || []).find((x) => x.provider === String(v))
+  if (!p) return
+  licode.saveSettings({
+    ...s,
+    provider: p.provider,
+    base_url: p.base_url ?? '',
+    api_key: p.api_key ?? '',
+    model: p.model || s.model || '',
+  })
+  Message.success(`已切换厂商：${p.name || p.provider}`)
+}
+
+function switchModel(v: string | number) {
+  const s = state.settings
+  if (!s || !v) return
+  licode.saveSettings({ ...s, model: String(v) })
+  Message.success(`已切换模型：${v}`)
+}
+
+const plusOptions = [
+  { label: '图片', value: 'image', icon: Image },
+  { label: '视频', value: 'video', icon: Video },
+  { label: '文件', value: 'file', icon: Paperclip },
+]
+
+function pickAttachment(kind: string) {
+  acceptType.value = kind === 'image' ? 'image/*' : kind === 'video' ? 'video/*' : ''
+  nextTick(() => fileInput.value?.click())
+}
+
 const slashCommands = [
   { key: '/clear', label: '清空对话', desc: '清空当前会话的全部消息', icon: Eraser, action: doClear },
   { key: '/branch', label: '复制分支', desc: '复制当前对话为新会话', icon: GitBranch, action: doBranch },
   { key: '/new', label: '新建对话', desc: '创建一个新会话', icon: Plus, action: () => licode.newSession() },
-  { key: '/attach', label: '添加附件', desc: '上传图片或文件', icon: Paperclip, action: () => fileInput?.value?.click() },
+  { key: '/attach', label: '添加附件', desc: '上传图片/视频/文件', icon: Paperclip, action: () => pickAttachment('') },
   { key: '/interrupt', label: '停止生成', desc: '中断当前正在进行的回复', icon: Square, action: () => licode.interrupt() },
 ]
 
@@ -88,8 +135,9 @@ function fileToAttachment(file: File): Promise<Attachment> {
     reader.onload = () => {
       const data = (reader.result as string).split(',')[1]
       const isImage = file.type.startsWith('image/')
+      const isVideo = file.type.startsWith('video/')
       resolve({
-        type: isImage ? 'image' : 'file',
+        type: isImage ? 'image' : isVideo ? 'video' : 'file',
         mimeType: file.type,
         data,
         filename: file.name,
@@ -168,6 +216,28 @@ function doClear() {
 <template>
   <div class="shrink-0 px-4 pb-4">
       <div class="relative mx-auto w-full max-w-3xl">
+      <!-- 模型选择：位于输入框上方 -->
+      <div class="mb-2 flex items-center gap-2">
+        <Select
+          v-if="providerOptions.length > 1"
+          :model-value="state.settings?.provider || ''"
+          :options="providerOptions"
+          size="sm"
+          class="w-44"
+          @update:model-value="switchProvider"
+        />
+        <Select
+          v-if="modelOptions.length"
+          :model-value="state.settings?.model || ''"
+          :options="modelOptions"
+          size="sm"
+          searchable
+          class="w-64"
+          placeholder="选择模型"
+          @update:model-value="switchModel"
+        />
+        <span v-else-if="state.settings?.model" class="truncate text-xs text-zinc-400">{{ state.settings.model }}</span>
+      </div>
       <div
         class="rounded-2xl border bg-white p-2 shadow-sm transition-colors focus-within:border-zinc-400 dark:border-zinc-800 dark:bg-zinc-900 dark:focus-within:border-zinc-600"
         :class="dragOver ? 'border-blue-500 bg-blue-50/50 dark:bg-blue-950/30' : 'border-zinc-200'"
@@ -182,6 +252,9 @@ function doClear() {
             class="relative flex items-center gap-2 rounded-lg border border-zinc-200 bg-zinc-50 px-2 py-1 dark:border-zinc-700 dark:bg-zinc-800"
           >
             <img v-if="att.type === 'image' && att.url" :src="att.url" class="h-10 w-10 rounded object-cover" />
+            <span v-else-if="att.type === 'video'" class="flex h-10 w-10 items-center justify-center rounded bg-zinc-200 dark:bg-zinc-700">
+              <Video :size="16" />
+            </span>
             <span v-else class="flex h-10 w-10 items-center justify-center rounded bg-zinc-200 dark:bg-zinc-700">
               <Image :size="16" />
             </span>
@@ -220,8 +293,16 @@ function doClear() {
           </div>
         </div>
         <div class="flex items-center gap-1 px-1 pt-1">
-          <input ref="fileInput" type="file" multiple accept="image/*,.pdf,.txt,.md,.json,.csv,.js,.ts,.py,.go,.rs,.java,.c,.cpp,.h,.html,.css,.xml,.yaml,.yml" class="hidden" @change="onFileChange" />
-          <Button variant="ghost" size="sm" :icon="Plus" title="添加图片/文件" @click="fileInput?.click()" />
+          <input ref="fileInput" type="file" multiple :accept="acceptType" class="hidden" @change="onFileChange" />
+          <Menu
+            :options="[plusOptions.map((o) => ({ label: o.label, value: o.value, icon: o.icon }))]"
+            placement="top-start"
+            @select="pickAttachment(String(($event as any)?.value ?? $event))"
+          >
+            <template #default>
+              <Button variant="ghost" size="sm" :icon="Plus" title="添加图片/视频/文件" />
+            </template>
+          </Menu>
           <Button variant="ghost" size="sm" :icon="GitBranch" title="复制会话为分支" @click="doBranch" />
           <Button variant="ghost" size="sm" :icon="Eraser" title="清空当前对话（/clear）" @click="doClear" />
           <span class="flex-1" />

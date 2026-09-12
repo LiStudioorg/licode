@@ -1,17 +1,10 @@
 <script setup lang="ts">
 import { Bot, Loader2 } from 'lucide-vue-next'
-import { Chip, Empty, Message } from 'fuxsto-design'
+import { Empty, Message } from 'fuxsto-design'
 const licode = useLicode()
 const { state } = licode
 const listRef = ref<HTMLElement | null>(null)
 const pinned = ref(true)
-
-const suggestions = [
-  '浏览并解释这个项目的结构',
-  '帮我写一个单元测试',
-  '找出代码里的潜在 bug',
-  '总结当前工作目录的改动',
-]
 
 function onScroll() {
   const el = listRef.value
@@ -53,11 +46,6 @@ function onRootClick(e: MouseEvent) {
           <p class="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
             本地 AI 编程助手 · 纯 Go · WASM 插件 · 子代理编排
           </p>
-          <div class="mt-6 flex flex-wrap justify-center gap-2">
-            <Chip v-for="s in suggestions" :key="s" variant="outline" size="sm" @click="licode.sendMessage(s)">
-              {{ s }}
-            </Chip>
-          </div>
         </div>
 
         <MessageItem v-for="m in state.messages" :key="m.id" :msg="m" />

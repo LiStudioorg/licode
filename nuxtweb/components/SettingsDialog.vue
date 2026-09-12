@@ -74,9 +74,21 @@ function addMcpPreset(name: string) {
   }
 }
 
-function addMcpCustom() {
-  mcpServers.value.push({ name: 'custom', type: 'stdio', command: '', args: [] })
+function addMcpCustom(type: 'stdio' | 'http' = 'stdio') {
+  if (type === 'http') mcpServers.value.push({ name: 'custom-http', type: 'http', url: '' })
+  else mcpServers.value.push({ name: 'custom', type: 'stdio', command: '', args: [] })
 }
+
+const mcpTypeOptions = [
+  { label: '本地命令 (stdio，如 node/npx/python)', value: 'stdio' },
+  { label: '远程网页 (http/https)', value: 'http' },
+]
+
+function addMcpTyped() {
+  addMcpCustom(String((newMcpType.value as any)) === 'http' ? 'http' : 'stdio')
+}
+
+const newMcpType = ref<'stdio' | 'http'>('stdio')
 
 const NUM_KEYS = [
   'temperature',
@@ -367,18 +379,6 @@ function save() {
           <template v-else-if="tab === 'basic'">
             <div class="grid grid-cols-2 gap-3">
               <label class="space-y-1">
-                <span class="text-xs text-zinc-500">模型</span>
-                <Input v-model="local.model" placeholder="如 gpt-4o-mini / claude-sonnet-4" />
-              </label>
-              <label class="space-y-1">
-                <span class="text-xs text-zinc-500">API 密钥</span>
-                <Input v-model="local.api_key" type="password" placeholder="sk-…" />
-              </label>
-              <label class="space-y-1">
-                <span class="text-xs text-zinc-500">API 地址</span>
-                <Input v-model="local.base_url" placeholder="https://api.openai.com/v1" />
-              </label>
-              <label class="space-y-1">
                 <span class="text-xs text-zinc-500">温度 temperature</span>
                 <Input v-model="local.temperature" type="number" step="0.1" min="0" max="2" />
               </label>
@@ -426,23 +426,26 @@ function save() {
                 <div
                   v-for="(srv, i) in local.dns?.servers || []"
                   :key="i"
-                  class="flex items-center gap-2"
+                  class="rounded-lg border border-zinc-200 p-2 dark:border-zinc-700"
                 >
-                  <Select
-                    :model-value="srv.mode || 'doh'"
-                    size="sm"
-                    class="w-28"
-                    :options="dnsModeOptions"
-                    @update:model-value="srv.mode = String($event)"
-                  />
+                  <div class="mb-1.5 flex items-center gap-2">
+                    <Select
+                      :model-value="srv.mode || 'doh'"
+                      size="sm"
+                      class="w-36"
+                      :options="dnsModeOptions"
+                      @update:model-value="srv.mode = String($event)"
+                    />
+                    <span class="flex-1" />
+                    <Button size="sm" variant="ghost" danger :icon="Trash2" @click="removeDnsServer(i)" />
+                  </div>
                   <Input
                     :model-value="srv.server || ''"
                     size="sm"
-                    class="flex-1"
+                    class="w-full"
                     placeholder="https://dns.alidns.com/dns-query 或 223.5.5.5:53"
                     @update:model-value="srv.server = String($event)"
                   />
-                  <Button size="sm" variant="ghost" danger :icon="Trash2" @click="removeDnsServer(i)" />
                 </div>
                 <div class="flex items-center gap-2">
                   <Input
@@ -584,11 +587,16 @@ function save() {
             <div class="grid grid-cols-2 gap-3">
               <label class="space-y-1">
                 <span class="text-xs text-zinc-500">Shell 路径（自动检测）</span>
-                <Select :options="shellOptions" :model-value="local.shell_path" size="sm" @update:model-value="local.shell_path = String($event)" placeholder="选择已检测到的 shell" clearable />
-              </label>
-              <label class="space-y-1">
-                <span class="text-xs text-zinc-500">Shell 路径（自定义）</span>
-                <Input v-model="local.shell_path" placeholder="/bin/sh" />
+                <Select
+                  :options="shellOptions"
+                  :model-value="local.shell_path || ''"
+                  size="sm"
+                  searchable
+                  clearable
+                  placeholder="选择已检测到的 shell"
+                  @update:model-value="local.shell_path = String($event || '')"
+                />
+                <span class="block text-[10px] text-zinc-400">如需其他路径，可在「高级 → 工具规则」旁手动编辑配置文件 shell_path 字段</span>
               </label>
               <label class="space-y-1">
                 <span class="text-xs text-zinc-500">沙箱镜像</span>
@@ -683,9 +691,10 @@ function save() {
               </div>
 
               <div class="rounded-xl border border-zinc-200 p-3 dark:border-zinc-800">
-                <div class="mb-2 flex items-center justify-between">
-                  <span class="text-xs font-medium text-zinc-500">已添加的 MCP 服务器</span>
-                  <Button size="sm" variant="outline" :icon="Plus" @click="addMcpCustom">自定义</Button>
+                <div class="mb-2 flex items-center gap-2">
+                  <span class="flex-1 text-xs font-medium text-zinc-500">已添加的 MCP 服务器</span>
+                  <Select v-model="newMcpType" :options="mcpTypeOptions" size="sm" class="w-56" />
+                  <Button size="sm" variant="outline" :icon="Plus" @click="addMcpTyped">添加</Button>
                 </div>
                 <div v-if="!mcpServers.length" class="text-xs text-zinc-400">暂未添加 MCP 服务器</div>
                 <div
@@ -702,8 +711,8 @@ function save() {
                     <Input v-model="srv.url" size="sm" placeholder="URL (https://...)" />
                   </div>
                   <div v-else class="grid grid-cols-2 gap-1">
-                    <Input v-model="srv.command" size="sm" placeholder="命令 (如 npx)" class="col-span-2" />
-                    <Input :model-value="(srv.args || []).join(' ')" size="sm" placeholder="参数（空格分隔）" class="col-span-2" @update:model-value="srv.args = String($event).split(' ')" />
+                    <Input v-model="srv.command" size="sm" placeholder="命令（如 node / npx / python / ./server）" class="col-span-2" />
+                    <Input :model-value="(srv.args || []).join(' ')" size="sm" placeholder="参数（空格分隔，如 -y @modelcontextprotocol/server-memory）" class="col-span-2" @update:model-value="srv.args = String($event).split(' ')" />
                   </div>
                 </div>
               </div>
