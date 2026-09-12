@@ -13,7 +13,14 @@ jobs:
 
       - name: Reject AI co-author trailers
         run: |
-          COMMITS=$(git log --format=%B ${{ github.event.before }}..${{ github.sha }})
+          # tag 推送/首推时 event.before 为全零 SHA，直接用 HEAD~ 会导致
+          # "Invalid revision range" 而使检查永久失败（ruleset 死锁），需兜底。
+          RANGE="HEAD~1..HEAD"
+          if [ -n "${{ github.event.before }}" ] && \
+             [ "${{ github.event.before }}" != "0000000000000000000000000000000000000000" ]; then
+            RANGE="${{ github.event.before }}..${{ github.sha }}"
+          fi
+          COMMITS=$(git log --format=%B $RANGE)
           
           if ! echo "$COMMITS" | grep -qi "Co-Authored-By:"; then
             echo "✅ 没有共同作者署名，检查通过。"
