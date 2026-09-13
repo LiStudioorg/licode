@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { X, Plus, Trash2, RefreshCw, CheckCircle2, Loader2 } from 'lucide-vue-next'
+import { X, Plus, Trash2, RefreshCw, CheckCircle2, Loader2, Settings as SettingsIcon } from 'lucide-vue-next'
 import { Message, Button, Input, Switch, Chip, Select, Tabs } from 'fuxsto-design'
 import type { DNSConfig, ProviderConfig, Settings } from '~/composables/useLicode'
 
@@ -186,6 +186,15 @@ const ruleOptions = [
 ]
 
 const newProvider = ref<ProviderRow>({ provider: '', name: '', type: 'openai', base_url: '', api_key: '', model: '', models: [] })
+
+// 厂商详细设置小弹窗：指定 IP / 忽略 SSL / 协议类型 / 获取模型等集中配置。
+const detailOpen = ref(false)
+const detailProvider = ref<ProviderRow | null>(null)
+
+function openDetail(p: ProviderRow) {
+  detailProvider.value = p
+  detailOpen.value = true
+}
 
 watch(
   () => state.settingsOpen,
@@ -577,15 +586,7 @@ function save() {
                   <span class="text-sm font-medium">{{ p.name || p.provider }}</span>
                   <Chip size="sm" variant="outline">{{ p.type || 'openai' }}</Chip>
                   <span class="flex-1" />
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    :icon="RefreshCw"
-                    :loading="fetching === p.provider"
-                    @click="fetchModels(p)"
-                  >
-                    获取模型
-                  </Button>
+                  <Button size="sm" variant="ghost" :icon="SettingsIcon" title="详细设置（指定 IP / 忽略 SSL 等）" @click="openDetail(p)" />
                   <Button
                     v-if="p.provider !== local.provider"
                     size="sm"
@@ -598,15 +599,8 @@ function save() {
                 </div>
                 <div class="grid grid-cols-2 gap-2">
                   <Input v-model="p.name" size="sm" placeholder="显示名称" />
-                  <Select
-                    :model-value="p.type || 'openai'"
-                    size="sm"
-                    :options="typeOptions"
-                    placeholder="协议类型"
-                    @update:model-value="p.type = String($event)"
-                  />
                   <Input v-model="p.base_url" size="sm" placeholder="API 地址" />
-                  <Input v-model="p.api_key" size="sm" type="password" placeholder="API 密钥" />
+                  <Input v-model="p.api_key" size="sm" type="password" placeholder="API 密钥" class="col-span-2" />
                   <div class="col-span-2 space-y-2 pt-1">
                     <div class="text-xs text-zinc-500">模型</div>
                     <div class="flex flex-wrap gap-1">
@@ -670,6 +664,50 @@ function save() {
                 添加厂商
               </Button>
             </div>
+
+            <!-- 厂商详细设置小弹窗 -->
+            <Teleport to="body">
+              <div
+                v-if="detailOpen && detailProvider"
+                class="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 p-4"
+                @click.self="detailOpen = false"
+              >
+                <div class="w-full max-w-md space-y-3 rounded-2xl border border-zinc-200 bg-white p-4 shadow-2xl dark:border-zinc-800 dark:bg-zinc-900">
+                  <div class="flex items-center justify-between">
+                    <span class="text-sm font-semibold">详细设置 · {{ detailProvider.name || detailProvider.provider }}</span>
+                    <Button variant="ghost" size="sm" :icon="X" @click="detailOpen = false" />
+                  </div>
+                  <label class="block space-y-1">
+                    <span class="text-xs text-zinc-500">协议类型</span>
+                    <Select
+                      :model-value="detailProvider.type || 'openai'"
+                      size="sm"
+                      :options="typeOptions"
+                      @update:model-value="detailProvider.type = String($event)"
+                    />
+                  </label>
+                  <label class="block space-y-1">
+                    <span class="text-xs text-zinc-500">指定 IP（可选，绕过 DNS 劫持/污染）</span>
+                    <Input v-model="detailProvider.host_ip" placeholder="如 104.18.7.10；SNI/证书校验仍用原域名" />
+                    <span class="block text-[10px] text-zinc-400">请求 base_url 域名时直接连此 IP，不再查询 DNS；TLS 证书按原域名正常校验，不会被引到假服务器</span>
+                  </label>
+                  <label class="flex items-center justify-between gap-2 rounded-lg border border-zinc-200 p-2.5 text-sm dark:border-zinc-700">
+                    <span>
+                      忽略 SSL 证书校验
+                      <span class="block text-[10px] text-zinc-400">仅自签名证书等受控场景使用；配合指定 IP 可访问内网/自建网关</span>
+                    </span>
+                    <Switch :model-value="!!detailProvider.insecure_ssl" size="sm" @update:model-value="detailProvider.insecure_ssl = !!$event" />
+                  </label>
+                  <div class="flex items-center gap-2">
+                    <Button size="sm" variant="outline" :icon="RefreshCw" :loading="fetching === detailProvider.provider" @click="fetchModels(detailProvider)">
+                      获取模型
+                    </Button>
+                    <span class="flex-1" />
+                    <Button size="sm" variant="primary" @click="detailOpen = false">完成</Button>
+                  </div>
+                </div>
+              </div>
+            </Teleport>
           </template>
 
           <!-- 高级 -->

@@ -32,12 +32,15 @@ type Server struct {
 	Server string `json:"server"`
 }
 
-// Config 描述自定义 DNS 配置。Servers 为空时解析报错（不回退系统 DNS）。
+// Config 描述自定义 DNS 配置。Servers 为空时并发查询全部预设（不使用系统 DNS）。
 // 并发查询数由 Concurrency 控制（0 = 默认 2，即主备同时查取最快）。
+// HostOverrides 是域名 → 指定 IP 的静态映射（如被 DNS 劫持的 API 域名），
+// 命中后跳过 DNS 查询直接返回该 IP（TLS 的 SNI/证书校验仍用原域名）。
 type Config struct {
-	Servers     []Server `json:"servers"`
-	Concurrency int      `json:"concurrency,omitempty"` // 并发查询服务器数（0=默认 2，-1=全部）
-	TimeoutMS   int      `json:"timeout_ms,omitempty"`  // 单次查询超时毫秒（0=默认 5000）
+	Servers       []Server          `json:"servers"`
+	Concurrency   int               `json:"concurrency,omitempty"` // 并发查询服务器数（0=默认 2，-1=全部）
+	TimeoutMS     int               `json:"timeout_ms,omitempty"`  // 单次查询超时毫秒（0=默认 5000）
+	HostOverrides map[string]string `json:"host_overrides,omitempty"`
 }
 
 // Presets 是常见 DNS 厂商的预设，供前端快速添加。国内厂商优先。
@@ -315,6 +318,14 @@ func (srv Server) lookup(ctx context.Context, host string, qtype uint16) ([]net.
 // 哪个先返回 IP 就用哪个。不使用系统 DNS；Servers 为空时并发查询全部内置预设。
 func (c Config) LookupIP(ctx context.Context, host string) ([]net.IP, error) {
 	host = strings.TrimSuffix(host, ".")
+	// 静态映射优先：域名被劫持/污染时，用户可为该域名指定真实 IP。
+	if ipStr := strings.TrimSpace(c.HostOverrides[strings.ToLower(host)]); ipStr != "" {
+		ip := net.ParseIP(ipStr)
+		if ip == nil {
+			return nil, fmt.Errorf("DNS 解析 %s 失败: 指定 IP %q 无效", host, ipStr)
+		}
+		return []net.IP{ip}, nil
+	}
 	servers := c.activeServers()
 	if len(servers) == 0 {
 		// 未配置任何 DNS：并发查询所有预设（国内外 plain/DoT/DoH 全部），取最快成功结果。

@@ -1,6 +1,7 @@
 package ai
 
 import (
+	"crypto/tls"
 	"fmt"
 	"net/http"
 	"os"
@@ -11,23 +12,29 @@ import (
 )
 
 // NewLLMHTTPClient 构造一个 *http.Client，并依据 DNS 配置注入自定义解析器。
+// InsecureSSL 为 true 时跳过 TLS 证书校验（仅限自签名证书等受控场景）。
 func (c Config) NewLLMHTTPClient(timeout time.Duration) *http.Client {
 	client := &http.Client{Timeout: timeout}
+	tlsCfg := &tls.Config{InsecureSkipVerify: c.InsecureSSL} //nolint:gosec // 用户显式选择忽略证书校验
+	transport := &http.Transport{TLSClientConfig: tlsCfg, TLSHandshakeTimeout: 15 * time.Second, ResponseHeaderTimeout: timeout}
 	if c.DNS != nil && c.DNS.Resolver() != nil {
-		client.Transport = &http.Transport{DialContext: c.DNS.Resolver(), TLSHandshakeTimeout: 15 * time.Second, ResponseHeaderTimeout: timeout}
+		transport.DialContext = c.DNS.Resolver()
 	}
+	client.Transport = transport
 	return client
 }
 
 // Config holds connection settings for an LLM provider.
 type Config struct {
-	Provider  string // 显示名（如 "openai" 或自定义名称）
-	Type      string // 协议类型：openai | claude | ollama | gemini；空则按 Provider 推断，未知按 openai 兼容
-	BaseURL   string
-	APIKey    string
-	Model     string
-	RetryMax  int    // LLM 调用失败重试次数（指数退避，处理 429/503/网络抖动）
-	DNS *dnsclient.Config // 自定义 DNS 解析配置（nil 使用系统默认）
+	Provider    string // 显示名（如 "openai" 或自定义名称）
+	Type        string // 协议类型：openai | claude | ollama | gemini；空则按 Provider 推断，未知按 openai 兼容
+	BaseURL     string
+	APIKey      string
+	Model       string
+	RetryMax    int               // LLM 调用失败重试次数（指数退避，处理 429/503/网络抖动）
+	DNS         *dnsclient.Config // 自定义 DNS 解析配置（nil 使用系统默认）
+	InsecureSSL bool              // 忽略 TLS 证书校验（仅限自签名证书等受控场景）
+	HostIP      string            // 指定 IP：base_url 域名直接连此 IP，绕过 DNS 劫持（SNI/证书校验仍用原域名）
 }
 
 const (

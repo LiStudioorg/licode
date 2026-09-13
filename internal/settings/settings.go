@@ -5,6 +5,7 @@ package settings
 import (
 	"context"
 	"encoding/json"
+	"net/url"
 	"runtime"
 	"strings"
 	"time"
@@ -27,6 +28,8 @@ type ProviderConfig struct {
 	APIKey   string   `json:"api_key"`
 	Model    string   `json:"model"`            // 当前使用的模型
 	Models   []string `json:"models,omitempty"` // 该厂商的模型列表（可自由增删，仅作展示/选择用）
+	HostIP      string `json:"host_ip,omitempty"`    // 指定 IP：该厂商 base_url 域名直接连此 IP（SNI/证书校验仍用原域名），绕过 DNS 劫持
+	InsecureSSL bool   `json:"insecure_ssl,omitempty"` // 忽略 TLS 证书校验（仅限自签名证书等受控场景）
 }
 
 // AddModel 把模型追加进列表（去重），供激活与导入时保持一致性。
@@ -215,17 +218,44 @@ func (s *Settings) SetActiveProvider(name string) {
 func (s *Settings) AIConfig() ai.Config {
 	pc := s.ActiveProvider()
 	cfg := ai.Config{
-		Provider: pc.DisplayName(),
-		Type:     pc.resolveType(),
-		BaseURL:  pc.BaseURL,
-		APIKey:   pc.APIKey,
-		Model:    pc.Model,
-		RetryMax: s.RetryMax,
+		Provider:    pc.DisplayName(),
+		Type:        pc.resolveType(),
+		BaseURL:     pc.BaseURL,
+		APIKey:      pc.APIKey,
+		Model:       pc.Model,
+		RetryMax:    s.RetryMax,
+		InsecureSSL: pc.InsecureSSL,
 	}
-	if s.DNS != nil {
+	if ip := strings.TrimSpace(pc.HostIP); ip != "" {
+		cfg.HostIP = ip
+		// 把厂商域名 → 指定 IP 注入 DNS 静态映射（拷贝一份避免改共享配置）。
+		d := dnsclient.Config{Servers: s.DNS.Servers, Concurrency: s.DNS.Concurrency, TimeoutMS: s.DNS.TimeoutMS}
+		if s.DNS.HostOverrides != nil {
+			d.HostOverrides = make(map[string]string, len(s.DNS.HostOverrides)+1)
+			for k, v := range s.DNS.HostOverrides {
+				d.HostOverrides[k] = v
+			}
+		}
+		if host := hostOf(pc.BaseURL); host != "" {
+			if d.HostOverrides == nil {
+				d.HostOverrides = map[string]string{}
+			}
+			d.HostOverrides[strings.ToLower(host)] = ip
+		}
+		cfg.DNS = &d
+	} else if s.DNS != nil {
 		cfg.DNS = s.DNS
 	}
 	return cfg
+}
+
+// hostOf 提取 URL 的主机名（解析失败返回空）。
+func hostOf(raw string) string {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil {
+		return ""
+	}
+	return u.Hostname()
 }
 
 // NewClient 根据激活厂商创建设置 LLM 客户端。

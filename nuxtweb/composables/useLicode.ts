@@ -14,6 +14,8 @@ export interface ProviderConfig {
   api_key?: string
   model?: string
   models?: string[] // 该厂商的模型列表（可自由增删，仅作展示/选择用）
+  host_ip?: string // 指定 IP：base_url 域名直接连此 IP（SNI/证书校验仍用原域名），绕过 DNS 劫持
+  insecure_ssl?: boolean // 忽略 TLS 证书校验（仅限自签名证书等受控场景）
 }
 
 export interface McpServer {
