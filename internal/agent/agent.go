@@ -328,6 +328,7 @@ func NewAgent(client ai.LLMClient, system string) *Agent {
 		Session:       session.NewSession(0),
 		MaxIterations: 16,
 		MaxTokens:     4096,
+		Permissions:   map[string]string{},
 	}
 	RegisterDefaultTools(a.Tools, a.Shell)
 	return a
