@@ -19,8 +19,8 @@ func (c Config) NewLLMHTTPClient(timeout time.Duration) *http.Client {
 	client := &http.Client{Timeout: timeout}
 	tlsCfg := &tls.Config{InsecureSkipVerify: c.InsecureSSL} //nolint:gosec // 用户显式选择忽略证书校验
 	if !c.InsecureSSL {
-		// 只信任内置 cacert.pem；embed 内容损坏时回退系统池保持可用。
-		if pool, ok := web.CACertPool(); ok {
+		// 内置权威 CA + 用户自定义 CA（~/.licode/certs/）；embed 损坏时回退系统池。
+		if pool, ok := web.MergedCACertPool(); ok {
 			tlsCfg.RootCAs = pool
 		}
 	}

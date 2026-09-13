@@ -378,6 +378,24 @@ func runServe(opts *ServeOptions) error {
 		}
 		handleSessionExport(w, r)
 	})
+	mux.HandleFunc("/api/ca", func(w http.ResponseWriter, r *http.Request) {
+		if !auth.require(w, r) {
+			return
+		}
+		handleCACerts(w, r)
+	})
+	mux.HandleFunc("/api/ca/upload", func(w http.ResponseWriter, r *http.Request) {
+		if !auth.require(w, r) {
+			return
+		}
+		handleCAUpload(w, r)
+	})
+	mux.HandleFunc("/api/ca/delete", func(w http.ResponseWriter, r *http.Request) {
+		if !auth.require(w, r) {
+			return
+		}
+		handleCADelete(w, r)
+	})
 	mux.HandleFunc("/api/shells", func(w http.ResponseWriter, r *http.Request) {
 		if !auth.require(w, r) {
 			return

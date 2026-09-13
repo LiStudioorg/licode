@@ -196,11 +196,65 @@ function openDetail(p: ProviderRow) {
   detailOpen.value = true
 }
 
+// 用户自定义 CA证书管理（~/.licode/certs/）。
+interface CAInfo { name: string; size: number; mod_time: string; subjects?: string[]; valid: boolean }
+const caList = ref<CAInfo[]>([])
+const caDir = ref('')
+const caInput = ref<HTMLInputElement | null>(null)
+
+async function loadCAs() {
+  try {
+    const d = await useApi<{ dir: string; certs?: CAInfo[] }>('/api/ca')
+    caDir.value = d.dir || '~/.licode/certs'
+    caList.value = d.certs || []
+  } catch {}
+}
+
+async function onCAChange(e: Event) {
+  const files = (e.target as HTMLInputElement).files
+  if (!files?.length) return
+  for (const f of Array.from(files)) {
+    const fd = new FormData()
+    fd.append('file', f)
+    try {
+      const res = await useApi<{ name: string }>('/api/ca/upload', { method: 'POST', body: fd })
+      Message.success(`已上传 ${res.name}`)
+    } catch (err: any) {
+      Message.error(err?.message || '上传失败')
+    }
+  }
+  ;(e.target as HTMLInputElement).value = ''
+  loadCAs()
+}
+
+function deleteCA(name: string) {
+  Dialog.confirm({
+    title: '删除 CA 证书',
+    content: `确定删除「${name}」？相关 TLS 将不再信任该 CA。`,
+    danger: true,
+    confirmText: '删除',
+    onConfirm: async () => {
+      try {
+        await useApi('/api/ca/delete', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ name }),
+        })
+        Message.success('已删除')
+        loadCAs()
+      } catch (err: any) {
+        Message.error(err?.message || '删除失败')
+      }
+    },
+  })
+}
+
 watch(
   () => state.settingsOpen,
   (v) => {
     if (v && state.settings) {
       loadShells()
+      loadCAs()
       local.value = JSON.parse(JSON.stringify(state.settings))
       if (local.value.streaming === null || local.value.streaming === undefined) local.value.streaming = true
       toolRows.value = Object.entries(local.value.tool_rules || {}).map(([tool, rule]) => ({
@@ -796,6 +850,35 @@ function save() {
                 spellcheck="false"
               />
             </label>
+
+            <!-- 用户自定义 CA 证书 -->
+            <div class="rounded-xl border border-zinc-200 p-3 dark:border-zinc-800">
+              <div class="mb-2 flex items-center justify-between">
+                <span class="text-xs font-medium text-zinc-500">自定义 CA 证书（TLS 额外信任）</span>
+                <span class="text-[10px] text-zinc-400">与内置权威 CA 分开 · 即传即生效</span>
+              </div>
+              <div v-if="caList.length" class="mb-2 space-y-1">
+                <div
+                  v-for="c in caList"
+                  :key="c.name"
+                  class="flex items-center gap-2 rounded-lg border border-zinc-200 px-2 py-1.5 dark:border-zinc-700"
+                >
+                  <CheckCircle2 v-if="c.valid" :size="13" class="shrink-0 text-emerald-500" />
+                  <X v-else :size="13" class="shrink-0 text-red-400" />
+                  <span class="max-w-40 truncate font-mono text-xs">{{ c.name }}</span>
+                  <span class="min-w-0 flex-1 truncate text-[10px] text-zinc-400">
+                    {{ c.valid ? c.subjects.join('；') : '无效证书' }}
+                  </span>
+                  <Button size="sm" variant="ghost" danger :icon="Trash2" @click="deleteCA(c.name)" />
+                </div>
+              </div>
+              <p v-else class="mb-2 text-[10px] text-zinc-400">暂无自定义 CA（自签名/私有网关的根证书可上传到此处）</p>
+              <input ref="caInput" type="file" accept=".pem,.crt,.cer" class="hidden" @change="onCAChange" />
+              <Button size="sm" variant="outline" :icon="Plus" @click="caInput?.click()">上传 CA 证书</Button>
+              <p class="mt-1 text-[10px] text-zinc-400">
+                保存于 {{ caDir }} · LLM/MCP 请求在内置权威 CA 之外额外信任这些证书
+              </p>
+            </div>
           </template>
 
           <!-- MCP -->
