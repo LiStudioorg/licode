@@ -5,6 +5,8 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+
+	"licode/internal/dnsclient"
 )
 
 // 配置文件约定：
@@ -177,6 +179,12 @@ func (s *Settings) finalize() error {
 	if s.Streaming == nil {
 		t := true
 		s.Streaming = &t
+	}
+	// DNS 默认值：不使用系统解析，默认阿里 223.5.5.5 主 + 腾讯 119.29.29.29 备。
+	// 用户可在设置里增删改；已有配置（含显式空列表）不覆盖。
+	if s.DNS == nil {
+		d := dnsclient.Defaults()
+		s.DNS = &d
 	}
 	s.UpsertActive()
 	s.syncTopLevel()

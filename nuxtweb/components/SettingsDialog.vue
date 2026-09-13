@@ -4,11 +4,62 @@ import { Message, Button, Input, Switch, Chip, Select, Tabs } from 'fuxsto-desig
 import type { DNSConfig, ProviderConfig, Settings } from '~/composables/useLicode'
 
 const dnsModeOptions = [
-  { label: '系统默认', value: 'system' },
-  { label: '普通 DNS', value: 'plain' },
+  { label: '普通 DNS (UDP)', value: 'plain' },
   { label: 'DoT (TLS)', value: 'dot' },
   { label: 'DoH (HTTPS)', value: 'doh' },
 ]
+
+// DNS 预设：国内 + 国外，覆盖 plain / DoT / DoH 三种协议，点击一键添加。
+const dnsPresets: { name: string; region: '国内' | '国外'; mode: string; server: string }[] = [
+  // 国内 - 阿里
+  { name: '阿里 DoH', region: '国内', mode: 'doh', server: 'https://dns.alidns.com/dns-query' },
+  { name: '阿里 UDP', region: '国内', mode: 'plain', server: '223.5.5.5:53' },
+  { name: '阿里 UDP 2', region: '国内', mode: 'plain', server: '223.6.6.6:53' },
+  { name: '阿里 DoT', region: '国内', mode: 'dot', server: '223.5.5.5:853' },
+  // 国内 - 腾讯
+  { name: '腾讯 DoH', region: '国内', mode: 'doh', server: 'https://doh.pub/dns-query' },
+  { name: '腾讯 UDP', region: '国内', mode: 'plain', server: '119.28.28.28:53' },
+  { name: '腾讯 DoT', region: '国内', mode: 'dot', server: '119.29.29.29:853' },
+  // 国内 - 其他
+  { name: 'OneDNS DoH', region: '国内', mode: 'doh', server: 'https://doh.onedns.net/dns-query' },
+  { name: 'OneDNS DoT', region: '国内', mode: 'dot', server: '1.2.4.8:853' },
+  { name: '360 UDP', region: '国内', mode: 'plain', server: '101.226.4.6:53' },
+  { name: '360 UDP 2', region: '国内', mode: 'plain', server: '218.30.118.6:53' },
+  { name: '114 UDP', region: '国内', mode: 'plain', server: '114.114.114.114:53' },
+  { name: '114 UDP 2', region: '国内', mode: 'plain', server: '114.114.115.115:53' },
+  { name: '百度 DoH', region: '国内', mode: 'doh', server: 'https://doh.baidu.com/dns-query' },
+  { name: 'CNNIC DoH', region: '国内', mode: 'doh', server: 'https://doh.cnnic.cn/dns-query' },
+  // 国外 - Cloudflare
+  { name: 'CF DoH', region: '国外', mode: 'doh', server: 'https://1.1.1.1/dns-query' },
+  { name: 'CF UDP', region: '国外', mode: 'plain', server: '1.0.0.1:53' },
+  { name: 'CF DoT', region: '国外', mode: 'dot', server: '1.1.1.1:853' },
+  { name: 'CF 安全 DoH', region: '国外', mode: 'doh', server: 'https://security.cloudflare-dns.com/dns-query' },
+  // 国外 - Google
+  { name: 'Google DoH', region: '国外', mode: 'doh', server: 'https://dns.google/dns-query' },
+  { name: 'Google DoT', region: '国外', mode: 'dot', server: '8.8.8.8:853' },
+  { name: 'Google UDP', region: '国外', mode: 'plain', server: '8.8.4.4:53' },
+  // 国外 - 其他
+  { name: 'Quad9 DoH', region: '国外', mode: 'doh', server: 'https://dns.quad9.net/dns-query' },
+  { name: 'Quad9 DoT', region: '国外', mode: 'dot', server: '9.9.9.9:853' },
+  { name: 'Quad9 UDP', region: '国外', mode: 'plain', server: '9.9.9.10:53' },
+  { name: 'OpenDNS DoH', region: '国外', mode: 'doh', server: 'https://doh.opendns.com/dns-query' },
+  { name: 'OpenDNS UDP', region: '国外', mode: 'plain', server: '208.67.222.222:53' },
+  { name: 'AdGuard DoH', region: '国外', mode: 'doh', server: 'https://dns.adguard-dns.com/dns-query' },
+  { name: 'AdGuard DoT', region: '国外', mode: 'dot', server: '94.140.14.14:853' },
+  { name: 'AdGuard UDP', region: '国外', mode: 'plain', server: '94.140.14.15:53' },
+  { name: 'NextDNS DoH', region: '国外', mode: 'doh', server: 'https://dns.nextdns.io/dns-query' },
+  { name: 'Mullvad DoH', region: '国外', mode: 'doh', server: 'https://dns.mullvad.net/dns-query' },
+  { name: 'Control D DoH', region: '国外', mode: 'doh', server: 'https://freedns.controld.com/p0' },
+]
+
+function addDnsPreset(p: (typeof dnsPresets)[0]) {
+  ensureDns()
+  if ((local.value.dns?.servers || []).some((s) => s.server === p.server)) {
+    Message.info(`已存在 ${p.name}`)
+    return
+  }
+  local.value.dns!.servers!.push({ mode: p.mode as any, server: p.server })
+}
 
 const _newDnsServer = ref('')
 
@@ -297,9 +348,14 @@ function buildSettings(): Settings {
   if (dns) {
     const servers = (dns.servers || []).filter((x) => x && (x.server || '').trim())
     if (servers.length) {
-      s.dns = { servers: servers.map((x) => ({ mode: x.mode || 'doh', server: x.server!.trim() })) }
+      s.dns = {
+        servers: servers.map((x) => ({ mode: x.mode === 'doh' || x.mode === 'dot' ? x.mode : 'plain', server: x.server!.trim() })),
+        concurrency: Math.max(1, Math.min(16, Number(dns.concurrency) || 0)) || undefined,
+        timeout_ms: Math.max(500, Math.min(30000, Number(dns.timeout_ms) || 0)) || undefined,
+      }
     } else {
-      delete s.dns
+      // 不允许清空 DNS：至少保留一条，避免退回系统解析
+      s.dns = { servers: [{ mode: 'plain', server: '223.5.5.5:53' }] }
     }
   }
 // _newModel 与 __models 都是临时字段，不随设置持久化
@@ -417,10 +473,10 @@ function save() {
                 <Switch :model-value="!!local.cache_enabled" size="sm" @update:model-value="local.cache_enabled = !!$event" />
               </label>
             </div>
-            <div class="rounded-xl border border-zinc-200 p-3 dark:border-zinc-800">
+                        <div class="rounded-xl border border-zinc-200 p-3 dark:border-zinc-800">
               <div class="mb-2 flex items-center justify-between">
-                <span class="text-xs font-medium text-zinc-500">DNS 解析</span>
-                <span class="text-[10px] text-zinc-400">多服务器容灾 · 任意厂商</span>
+                <span class="text-xs font-medium text-zinc-500">DNS 解析（不使用系统 DNS，仅用以下服务器）</span>
+                <span class="text-[10px] text-zinc-400">默认阿里主 + 腾讯备 · 并发取最快</span>
               </div>
               <div class="space-y-2">
                 <div
@@ -429,8 +485,9 @@ function save() {
                   class="rounded-lg border border-zinc-200 p-2 dark:border-zinc-700"
                 >
                   <div class="mb-1.5 flex items-center gap-2">
+                    <span class="text-[10px] font-medium text-zinc-400">{{ i === 0 ? '主' : i === 1 ? '备' : `#${i + 1}` }}</span>
                     <Select
-                      :model-value="srv.mode || 'doh'"
+                      :model-value="srv.mode || 'plain'"
                       size="sm"
                       class="w-36"
                       :options="dnsModeOptions"
@@ -443,7 +500,7 @@ function save() {
                     :model-value="srv.server || ''"
                     size="sm"
                     class="w-full"
-                    placeholder="https://dns.alidns.com/dns-query 或 223.5.5.5:53"
+                    placeholder="223.5.5.5:53 或 https://dns.alidns.com/dns-query"
                     @update:model-value="srv.server = String($event)"
                   />
                 </div>
@@ -458,9 +515,42 @@ function save() {
                   <Button size="sm" variant="outline" :icon="Plus" @click="addDnsServer">添加</Button>
                 </div>
               </div>
+              <div class="mt-2">
+                <div class="mb-1 text-[10px] font-medium text-zinc-400">预设（点击一键添加）</div>
+                <div class="flex flex-wrap gap-1">
+                  <Button
+                    v-for="p in dnsPresets"
+                    :key="p.server"
+                    size="sm"
+                    variant="outline"
+                    class="text-[11px]"
+                    @click="addDnsPreset(p)"
+                  >
+                    {{ p.region }} · {{ p.name }}
+                  </Button>
+                </div>
+              </div>
+              <div class="mt-2 grid grid-cols-2 gap-2">
+                <label class="space-y-1">
+                  <span class="text-[10px] text-zinc-400">并发查询数（0=默认 2，主备同时查取最快）</span>
+                  <Input
+                    :model-value="local.dns?.concurrency ?? ''"
+                    type="number" min="1" max="16" placeholder="2"
+                    @update:model-value="ensureDns(); local.dns!.concurrency = Number($event) || 0"
+                  />
+                </label>
+                <label class="space-y-1">
+                  <span class="text-[10px] text-zinc-400">单次查询超时（毫秒，0=默认 5000）</span>
+                  <Input
+                    :model-value="local.dns?.timeout_ms ?? ''"
+                    type="number" min="500" max="30000" placeholder="5000"
+                    @update:model-value="ensureDns(); local.dns!.timeout_ms = Number($event) || 0"
+                  />
+                </label>
+              </div>
               <p class="mt-1 text-[10px] text-zinc-400">
-                system 系统默认 · plain 普通 DNS (53) · dot DNS over TLS (853) · doh DNS over HTTPS ·
-                留空自动兜底全国内 DoH/DoT
+                plain 普通 DNS (UDP/TCP 53) · dot DNS over TLS (853) · doh DNS over HTTPS ·
+                不使用系统 DNS，API/模型请求域名均按以上服务器解析
               </p>
             </div>
           </template>

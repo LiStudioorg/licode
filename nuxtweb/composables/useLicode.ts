@@ -70,6 +70,8 @@ export interface Settings {
 
 export interface DNSConfig {
   servers?: DNSServer[]
+  concurrency?: number
+  timeout_ms?: number
 }
 
 export interface DNSServer {
