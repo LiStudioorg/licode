@@ -10,6 +10,7 @@
 config.toml
 .env
 *.pem
+!internal/web/certs/cacert.pem
 *.key
 
 # 编辑器/系统

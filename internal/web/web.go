@@ -4,11 +4,13 @@
 package web
 
 import (
+	"crypto/x509"
 	"embed"
 	"html/template"
 	"io"
 	"io/fs"
 	"strings"
+	"sync"
 )
 
 // FS 嵌入的静态资源（根为 internal/web，含 static/ 子目录）。
@@ -28,6 +30,33 @@ var nuxtFS embed.FS
 //
 //go:embed templates
 var templates embed.FS
+
+// CACertPEM 嵌入的权威 CA 根证书束（https://curl.se/ca/cacert.pem，Mozilla CA 列表）。
+// internal/ai 与 internal/agent 构造 HTTP 客户端时用它作为唯一信任来源，
+// 不依赖系统证书池，保证在系统证书缺失/被篡改的环境下 TLS 校验行为一致。
+//
+//go:embed certs/cacert.pem
+var CACertPEM []byte
+
+// CACertPool 返回只含内置 cacert.pem 的证书池（进程内单例）。
+// 第二个返回值为 false 表示 embed 内容损坏，调用方应回退系统证书池。
+func CACertPool() (*x509.CertPool, bool) {
+	caOnce.Do(func() {
+		pool := x509.NewCertPool()
+		if !pool.AppendCertsFromPEM(CACertPEM) {
+			caErr = true
+			return
+		}
+		caPool = pool
+	})
+	return caPool, !caErr
+}
+
+var (
+	caOnce sync.Once
+	caPool *x509.CertPool
+	caErr  bool
+)
 
 var funcMap = template.FuncMap{
 	"join": func(sep string, items []string) string { return strings.Join(items, sep) },

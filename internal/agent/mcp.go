@@ -11,6 +11,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -21,6 +22,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"licode/internal/web"
 )
 
 // MCPServer 描述一个 MCP 服务器。
@@ -355,10 +358,15 @@ func newHTTPConn(s MCPServer) (*httpConn, error) {
 	if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
 		return nil, fmt.Errorf("仅支持 http/https 的 mcp 服务地址")
 	}
+	// TLS 只信任内置 cacert.pem 权威 CA（与 LLM 客户端一致）。
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	if pool, ok := web.CACertPool(); ok {
+		transport.TLSClientConfig = &tls.Config{RootCAs: pool} //nolint:gosec
+	}
 	return &httpConn{
 		server:  s,
 		baseURL: raw,
-		client:  &http.Client{Timeout: 60 * time.Second},
+		client:  &http.Client{Timeout: 60 * time.Second, Transport: transport},
 	}, nil
 }
 
