@@ -121,16 +121,12 @@ POST {"path":"D:\\xxx"} → 200 {"ok":true,"root":"D:\\xxx"}
 200 {"ok":false,"error":"..."}
 ```
 
-## 4. 联网搜索（`cmd/search.go`，`internal/search`）
 
-> 搜索服务初始化失败时全部返回 500 `{"error":"搜索服务不可用"}`。
 
-### `GET /api/search/engines`
 ```
 200 {"engines":["bing","baidu","duckduckgo"]}
 ```
 
-### `GET /api/search?q=&engines=&local=&max=` 搜索
 参数：
 - `q`（必填）关键词。
 - `engines`：逗号分隔引擎名，空 = 全部。
@@ -144,7 +140,6 @@ POST {"path":"D:\\xxx"} → 200 {"ok":true,"root":"D:\\xxx"}
 - `local=true` 的结果会并入本地库命中（`local:true`）。
 - 25s 超时；失败 → 400 `{"error":...}`。
 
-### `POST /api/search/fetch` 网页预览
 ```json
 { "url": "https://…" }
 ```
@@ -153,7 +148,6 @@ POST {"path":"D:\\xxx"} → 200 {"ok":true,"root":"D:\\xxx"}
 502 {"error":"抓取失败..."}
 ```
 
-### `POST /api/search/save` 收藏收录
 ```json
 { "url": "https://…" }
 ```
@@ -163,13 +157,11 @@ POST {"path":"D:\\xxx"} → 200 {"ok":true,"root":"D:\\xxx"}
 ```
 - 抓取全文并写入本地索引库。
 
-### `GET /api/search/catalog?q=` 本地库列表
 ```
 200 {"docs":[{"url":"…","title":"…","fetched_at":1788579179,"len":4024}],"total":1}
 ```
 - `len` 是正文 rune 数（约等于 KB 级大小）。
 
-### `POST /api/search/delete` 删除收录
 ```json
 { "url": "https://…" }
 ```
@@ -178,7 +170,6 @@ POST {"path":"D:\\xxx"} → 200 {"ok":true,"root":"D:\\xxx"}
 400 {"error":"..."}
 ```
 
-### `GET /api/search/stats` 统计
 ```
 200 {"docs":0,"terms":0,"text_bytes":0,"engines":["bing","baidu","duckduckgo"],"enabled":["bing","baidu","duckduckgo"]}
 ```

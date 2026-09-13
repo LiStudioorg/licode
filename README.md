@@ -10,7 +10,7 @@
 - 工具调用：读写文件、目录、代码搜索、shell 执行，Agent 自主调用并回填；工具规则可配置（允许/询问/拒绝），可"始终允许"，可自动允许
 - 子代理系统：explorer / builder / planner，DAG 依赖并行调度
 - 多对话：会话列表、自动标题、切换、删除，实时保存到 `~/.licode/sessions/`
-- MCP 接入（stdio JSON-RPC，可多个）与 Skills 技能（可多个，`skills/*.md`）
+- MCP 接入（本地命令 stdio 与远程 http 均可）与 Skills 技能（可多个，`skills/*.md`）
 - 上下文压缩 compaction、自动标题 title_gen
 - 运行时健壮性：LLM 调用指数退避重试（处理 429/503/网络抖动）、子代理硬超时、上下文窗口滑动保护（token 预算）
 - 安全纵深：工具输出敏感信息脱敏（sk-* API Key 等）、可选 Docker 沙箱隔离执行 Shell
@@ -51,10 +51,8 @@
 | `Delete` | 删除文件或空目录 | **需审批** |
 | `Move` | 移动/重命名文件 | 允许 |
 | `Dispatch` | 并行调度子代理执行任务 | 允许 |
-| `WebSearch` | 自建联网搜索（必应/百度/DuckDuckGo + 本地收录库） | 允许 |
-| `WebFetch` | 抓取网页正文并自动收录到本地库 | 允许 |
 
-> **Skills / MCP 不是"需要手动加载"的东西**：把它们放进对应目录就自动加载、运行中热更新。`WebSearch` / `WebFetch` 同理——搜索功能可用时自动注册，无需手动开启。
+> **Skills / MCP 不是"需要手动加载"的东西**：把它们放进对应目录就自动加载、运行中热更新。
 
 **权限配置**（设置 → 工具规则，如 `Read:allow, Write:ask, Bash:deny`）：
 
@@ -111,39 +109,10 @@
 ├── mcp/             MCP 服务器配置
 ├── sessions/        对话记录（实时保存）
 ├── logs/            日志
-│   └── audit/       代码审计报告（JSON，按 task_id 保存）
 ├── cache/           缓存
 ├── md/              附加提示词（递归读取其中所有 .md）
 └── system-prompt.md 系统提示词（首次自动生成默认内容）
 ```
-
-## 代码审计与一键修复
-
-「审计」面板（Web 界面右侧第三个标签页）可对整个工作区执行静态规则 + LLM 双重扫描，并支持「生成修复预览 → 人工确认 → 一键修复」流程：
-
-1. **静态扫描**：内置 12 类规则（硬编码密钥、SQL 拼接、eval、命令注入、弱哈希、777 权限、HTTP 明文、DOM 注入、不安全的 unsafe 调用、忽略错误、TODO/FIXME 标记、yaml.load 等），对全部受支持源码文件进行。
-2. **LLM 深度分析**：对体积较小的文件（≤ 64 KB，默认最多 8 个文件、3 并发）交由模型分析，并给出修复建议与代码补丁。
-3. **人工确认修复**：勾选问题 → 「生成修复预览」，以高亮 diff 展示模型的修改建议；点击「确认修复」后才会写入磁盘，且 **修改前自动生成 `.bak` 备份**，随时可回滚。
-4. **会话留痕**：修复完成后会向当前对话追加一条审计记录。
-
-设置项（`config.json`，Web 设置面板可改）：
-
-| 键 | 类型 | 默认 | 说明 |
-| --- | --- | --- | --- |
-| `audit_enabled` | bool | `true` | 是否启用审计功能 |
-| `audit_auto_fix` | bool | `true` | 修复前是否自动生成预览 |
-| `audit_scan_dirs` | string[] | `["."]` | 扫描目录（相对工作区根） |
-| `audit_exclude` | string[] | `vendor/`、`node_modules/`、`.git/`、`dist/` | 排除路径正则 |
-
-API：`GET /api/audit/status`、`POST /api/audit/start`、`GET /api/audit/result?task_id=…`、`POST /api/audit/fix`（`?confirm=true` 时落盘）。审计报告同时以 JSON 保存到 `~/.licode/logs/audit/<task_id>.json`。
-
-## 联网搜索（自建，多引擎）
-
-Web 界面「搜索」面板可同时检索多个引擎（必应 / 百度 / DuckDuckGo，均为自建解析，无第三方搜索 API）与本地已收录库；每条结果支持**网页预览**与**收藏收录**。本地库用倒排索引（中文 bigram 分词 + BM25），持久化在 `~/.licode/search/index.json`，支持增、删、站内检索。
-
-已接入 Agent 工具（`WebSearch` 多引擎合成检索 / `WebFetch` 抓单页全文并自动收录），对话中即可联网查询。
-
-API：`GET /api/search?q=…&engines=bing,baidu,duckduckgo&local=1&max=…`、`GET/POST /api/search/fetch`、`POST /api/search/save`、`GET /api/search/catalog`、`POST /api/search/delete`、`GET /api/search/engines|stats`。
 
 ## 文档
 
@@ -169,14 +138,12 @@ API：`GET /api/search?q=…&engines=bing,baidu,duckduckgo&local=1&max=…`、`G
 ├── cmd/
 │   ├── serve.go           # Web 服务器 + WebSocket + 路由
 │   ├── auth.go            # 登录认证
-│   ├── files.go           # 文件浏览/编辑 API
-│   └── audit.go           # 代码审计 API
+│   └── files.go           # 文件浏览/编辑 API
 ├── internal/
 │   ├── ai/                # LLMClient 接口 + openai/claude/ollama/gemini
 │   ├── agent/             # 主 Agent、工具、子代理 DAG、MCP、Skills
 │   ├── session/           # 多会话 + 实时落盘
 │   ├── settings/          # 设置 + ~/.licode 数据目录
-│   ├── audit/             # 代码审计（静态规则 + LLM 分析 + 修复）
 │   ├── websocket/         # Hub + 事件协议
 │   └── web/               # go:embed Nuxt 静态前端 + 旧版资源
 └── build.sh               # 9 平台交叉编译

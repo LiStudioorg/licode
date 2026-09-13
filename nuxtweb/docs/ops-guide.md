@@ -97,7 +97,6 @@ git diff --name-status f3748a2 HEAD
 | --- | --- |
 | `cmd/serve.go` | 路由注册、WS 消息/事件处理、`/api/models`、认证 |
 | `cmd/files.go` | 文件 API 的请求/响应字段 |
-| `cmd/search.go`、`internal/search/*` | 搜索 API（新功能时整包新增） |
 | `cmd/audit.go`、`internal/audit/*` | 审计 API 结构 |
 | `internal/websocket/websocket.go` | **WS 协议**（消息/事件类型、字段名）——变更要同步改前端 |
 | `internal/settings/settings.go` | **设置对象字段**（新增字段要在设置界面补） |
@@ -141,7 +140,6 @@ git diff --name-status f3748a2 HEAD
 - **数字**字段记得在 `buildSettings()` 的 `NUM_KEYS` 里加并 `Number(...)` 转换；**逗号列表**（数组）用 `splitList`；**JSON**（如 mcp）用文本域 parse。
 - 永远**全量回传**：`save()` 用 `JSON.parse(JSON.stringify(state.settings))` 起步再覆盖字段，切勿只发局部。
 
-### 5.4 新功能面板（以搜索面板为例的套路）
 
 1. 新增 `components/XxxPanel.vue`，用 `useApi` 调新端点。
 2. `RightPanel.vue` 的 `tabs` 数组加 `{ label:'xxx', value:'xxx' }`；在面板切换处加 `<XxxPanel v-else-if="state.rightTab === 'xxx'" />`；把 `'xxx'` 加进 `useLicode.ts` 的 `rightTab` 联合类型。
@@ -177,12 +175,11 @@ npm run dev        # 访问 http://localhost:3000
 | 1 | REST 代理 | `curl http://localhost:3000/api/auth` | JSON（不是 HTML） |
 | 2 | 版本 | `curl http://localhost:3000/api/version` | `{"version":"0.0.0.x",...}` |
 | 3 | 文件 | `curl "http://localhost:3000/api/files?path="` | 工作目录列表 JSON |
-| 4 | 搜索 | `curl "http://localhost:3000/api/search/stats"` | `{engines:["bing","baidu","duckduckgo"],...}` |
 | 5 | WS | node 脚本 `POST /signin` 拿 cookie → `new WebSocket('ws://localhost:3000/ws',{headers:{Cookie}})` → 发 `settings_get`/`sessions_get` | 收到 `settings`/`sessions` 事件；**后端日志出现「客户端已连接」** |
 | 6 | 登录（启用密码时） | 浏览器走 `/login` | 登录成功进主界面；后端日志有连接 |
 | 7 | 聊天 | 发一条消息 | 流式返回 |
 | 8 | 设置保存 | 改一个字段保存再重开 | 值持久化（`~/.licode/config.json`） |
-| 9 | 无头浏览器全流程 | puppeteer-core + Edge：登录→聊天→设置→文件→搜索→审计 | 控制台 0 error/warn |
+| 9 | 无头浏览器全流程 | puppeteer-core + Edge：登录→聊天→设置→文件 | 控制台 0 error/warn |
 
 > 注意：验证设置保存会真实写 `~/.licode/config.json`，**改完要恢复原值**（尤其 api_key/model）。
 
@@ -199,7 +196,6 @@ npm run dev        # 访问 http://localhost:3000
 | 设置无法保存 / 保存后变默认 | WS 未连接；或保存时 `state.settings` 为 null | 保存按钮已禁用+提示；确认后端可达 |
 | `/api/*` 返回 HTML 而不是 JSON | devProxy 剥前缀 | `target: '${backend}/api'` |
 | WS 1006 打不开 | dev 未开 `nitro.experimental.websocket`；或双 upgrade 处理 | 开 experimental.websocket；hooks 隧道仅在无转发时挂载 |
-| 搜索报错/无结果 | 环境无法访问 bing/baidu/ddg | 属网络问题；`local=only` 可只查本地库 |
 | 模型只回复文本不调工具 | 模型行为（如 deepseek-v4-flash） | 非前端问题；排查 ask 流程注意 `auto_allow:true` 跳过询问 |
 | 后端改了 WS 协议但前端无响应 | 前端 `handleEvent` 没同步 | 对比 4.2 的 websocket.go 差异改 `useLicode.ts` |
 | 新 API 404 | 后端没重新编译/没重启 | 重新 `go build` 并重启后端 |
