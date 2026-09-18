@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"path"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -548,6 +549,12 @@ func runServe(opts *ServeOptions) error {
 				serveNuxtFile(w, r, nuxt, nested)
 				return
 			}
+		}
+		// 带扩展名的资源路径缺失时必须 404，绝不能回退成 index.html：
+		// 否则浏览器会把 HTML 当 JS/CSS 解析，出现前后端产物不一致的诡异问题。
+		if path.Ext(p) != "" {
+			http.NotFound(w, r)
+			return
 		}
 		serveNuxtFile(w, r, nuxt, "index.html")
 	}))

@@ -166,4 +166,4 @@ POST {"path":"D:\\xxx"} → 200 {"ok":true,"root":"D:\\xxx"}
 ## 6. 通用约定
 - 错误一律 `{"error":"中文说明"}` + 4xx/5xx。
 - 未登录：带 `Accept: application/json` → 401 纯文本「401 未登录」；否则 302 → `/login`。前端 `useApi` 始终带 `Accept: application/json`。
-- `GET /`：需要登录时返回 Nuxt SPA；`/settings`、`/tools` 返回各自预渲染页面。
+- `GET /`：需要登录时返回 Nuxt SPA；`/settings` 返回预渲染设置页（工具管理为其内嵌页签），`/tools` 仅重定向到 `/settings`。

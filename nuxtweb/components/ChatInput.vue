@@ -217,13 +217,14 @@ function doClear() {
   <div class="shrink-0 px-4 pb-4">
       <div class="relative mx-auto w-full max-w-3xl">
       <!-- 模型选择：位于输入框上方 -->
-      <div class="mb-2 flex items-center gap-2">
+      <div class="mb-2 flex min-w-0 flex-wrap items-center gap-2">
         <Select
           v-if="providerOptions.length > 1"
           :model-value="state.settings?.provider || ''"
           :options="providerOptions"
           size="sm"
-          class="w-44"
+          class="w-40 shrink-0"
+          placeholder="选择厂商"
           @update:model-value="switchProvider"
         />
         <Select
@@ -232,15 +233,19 @@ function doClear() {
           :options="modelOptions"
           size="sm"
           searchable
-          class="w-64"
+          class="w-56 max-w-full"
           placeholder="选择模型"
           @update:model-value="switchModel"
         />
         <span v-else-if="state.settings?.model" class="truncate text-xs text-zinc-400">{{ state.settings.model }}</span>
       </div>
       <div
-        class="rounded-2xl border bg-white p-2 shadow-sm transition-colors focus-within:border-zinc-400 dark:border-zinc-800 dark:bg-zinc-900 dark:focus-within:border-zinc-600"
-        :class="dragOver ? 'border-blue-500 bg-blue-50/50 dark:bg-blue-950/30' : 'border-zinc-200'"
+        class="rounded-2xl border p-3 shadow-sm transition-all focus-within:shadow-md"
+        :class="
+          dragOver
+            ? 'border-blue-500 bg-blue-50/60 dark:bg-blue-950/30'
+            : 'border-zinc-200 bg-white focus-within:border-zinc-300 dark:border-zinc-800 dark:bg-zinc-900 dark:focus-within:border-zinc-600'
+        "
         @dragover.prevent="dragOver = true"
         @dragleave.prevent="dragOver = false"
         @drop.prevent="onDrop"
@@ -269,7 +274,7 @@ function doClear() {
           ref="taRef"
           v-model="input"
           rows="1"
-          class="block w-full resize-none bg-transparent px-2 py-1.5 text-sm leading-relaxed outline-none placeholder:text-zinc-400"
+          class="block w-full resize-none bg-transparent px-1.5 py-1 text-sm leading-relaxed outline-none placeholder:text-zinc-400"
           placeholder="输入消息，Enter 发送，Shift+Enter 换行，/ 快速命令…"
           @keydown="onKeydown"
           @input="onInput"
@@ -292,7 +297,7 @@ function doClear() {
             <kbd class="rounded bg-zinc-100 px-1.5 py-0.5 text-[10px] text-zinc-500 dark:bg-zinc-800">{{ cmd.key }}</kbd>
           </div>
         </div>
-        <div class="flex items-center gap-1 px-1 pt-1">
+        <div class="mt-2 flex items-center gap-1 border-t border-zinc-100 pt-2 dark:border-zinc-800">
           <input ref="fileInput" type="file" multiple :accept="acceptType" class="hidden" @change="onFileChange" />
           <Menu
             :options="[plusOptions.map((o) => ({ label: o.label, value: o.value, icon: o.icon }))]"
@@ -314,7 +319,7 @@ function doClear() {
           </Button>
         </div>
       </div>
-      <p class="mt-1.5 text-center text-[11px] text-zinc-400">
+      <p class="mt-2 text-center text-[11px] text-zinc-400">
         licode 可能会犯错，请检查重要信息。
       </p>
     </div>

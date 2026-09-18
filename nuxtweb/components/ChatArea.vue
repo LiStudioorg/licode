@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Bot, Loader2 } from 'lucide-vue-next'
+import { Loader2 } from 'lucide-vue-next'
 import { Empty, Message } from 'fuxsto-design'
 const licode = useLicode()
 const { state } = licode
@@ -37,14 +37,9 @@ function onRootClick(e: MouseEvent) {
     <div ref="listRef" class="min-h-0 flex-1 overflow-y-auto" @scroll="onScroll" @click="onRootClick">
       <div class="mx-auto w-full max-w-3xl px-4 py-6">
         <div v-if="!state.messages.length" class="flex flex-col items-center pt-24">
-          <span
-            class="mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900"
-          >
-            <Bot :size="26" />
-          </span>
           <h1 class="text-xl font-semibold tracking-tight">licode</h1>
           <p class="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
-            本地 AI 编程助手 · 纯 Go · WASM 插件 · 子代理编排
+            本地 AI 编程助手 · 纯 Go · 子代理编排 · 工具管理
           </p>
         </div>
 
