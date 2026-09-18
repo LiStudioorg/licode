@@ -121,109 +121,37 @@ POST {"path":"D:\\xxx"} → 200 {"ok":true,"root":"D:\\xxx"}
 200 {"ok":false,"error":"..."}
 ```
 
+## 4. 工具管理（`cmd/tools_api.go`）
 
+### `GET /api/tools`
+- 返回全部工具（内置、子代理、MCP、外部命令、技能）及生效权限与 MCP 服务器配置。
+- MCP 工具枚举 8s 超时，连接后立即释放子进程；连接失败返回空列表 + `mcp_error`。
+```
+200 {"tools":[{"name":"Read","description":"…","source":"builtin","removable":false,"rule":"allow"}],"mcp_servers":[],"mcp_error":""}
+```
+- `source`：`builtin|subagent|mcp|external|skill`；`rule`：`allow|ask|deny`。
 
-```
-200 {"engines":["bing","baidu","duckduckgo"]}
-```
-
-参数：
-- `q`（必填）关键词。
-- `engines`：逗号分隔引擎名，空 = 全部。
-- `local`：`1`（默认，联网+本地）、`0`（仅联网）、`only`（仅本地库）。
-- `max`：1~30，默认 10。
-```
-200 {"q":"Go语言","results":[
-  {"engine":"bing","title":"Go 语言 教程 | 菜鸟教程","url":"https://…","snippet":"…","local":false}
-]}
-```
-- `local=true` 的结果会并入本地库命中（`local:true`）。
-- 25s 超时；失败 → 400 `{"error":...}`。
-
+### `POST /api/tools/rule`
 ```json
-{ "url": "https://…" }
+{ "name": "Shell", "rule": "ask" }
 ```
 ```
-200 {"url":"…","title":"…","text":"…（≤30000 字，超出加截断提示）"}
-502 {"error":"抓取失败..."}
+200 {"ok":true}
+400 {"error":"规则取值无效（应为 允许/询问/禁止）"}
 ```
 
+### `POST /api/tools/delete`
 ```json
-{ "url": "https://…" }
+{ "type": "mcp", "name": "git" }
 ```
+- `type`：`mcp`（删除服务器配置并清理其工具规则）、`external`（删 `~/.licode/tools/*.json`）、`skill`（删技能 md）。
+- 文件型删除严格限定在对应目录内。
 ```
-200 {"ok":true,"url":"…","title":"…"}
-502 {"error":"..."}
-```
-- 抓取全文并写入本地索引库。
-
-```
-200 {"docs":[{"url":"…","title":"…","fetched_at":1788579179,"len":4024}],"total":1}
-```
-- `len` 是正文 rune 数（约等于 KB 级大小）。
-
-```json
-{ "url": "https://…" }
-```
-```
-200 {"ok":true,"url":"…"}
-400 {"error":"..."}
+200 {"ok":true}
+404 {"error":"未找到该 MCP 服务器"}
 ```
 
-```
-200 {"docs":0,"terms":0,"text_bytes":0,"engines":["bing","baidu","duckduckgo"],"enabled":["bing","baidu","duckduckgo"]}
-```
-- `enabled` = 当前启用的引擎集合。
-
-## 5. 代码审计（`cmd/audit.go`，`internal/audit`）
-
-### `GET /api/audit/status`
-```
-200 {"enabled":true,"running":false,"latest":"task-…","summary":{...}|null,"scan_dirs":["."],"exclude":[...]}
-```
-
-### `POST /api/audit/start`
-```json
-{ "scan_dirs": [".","cmd"], "exclude": [] }
-```
-```
-202 {"task_id":"…"}
-403 {"error":"审计未启用"}     // settings.audit_enabled=false
-409 {"error":"审计已在运行"}   // 已有一个任务
-```
-
-### `GET /api/audit/result?task_id=`（空 = 最近一次）
-Report JSON：
-```jsonc
-{
-  "task_id":"…","root":"D:\\code\\licode","status":"done","progress":100,
-  "scanned_files":120,"issues":[
-    {"id":"…","file":"cmd/serve.go","line":42,"severity":"high",
-     "category":"…","description":"…","suggestion":"…"}
-  ],
-  "created_at":"…","finished_at":"…","error":"","static_hits":N,"llm_hits":N,
-  "static_files":N,"llm_files":N
-}
-```
-- severity：`critical|high|medium|low`。
-- `progress` 0-100（运行中）。
-
-### `POST /api/audit/fix` 一键修复
-第一步（预览）：
-```json
-{ "task_id":"…", "issue_ids":["id1","id2"] }
-```
-```
-200 {"preview":{"path":"abs\\file.go":"+…\n-…\n"},"files":["path1","path2"]}
-```
-第二步（确认）——带 `?confirm=true`：
-```
-200 {"applied":true,"files":["…"],"backed_up":2,"backup_path":"…","patch":"…"}
-```
-- 修复前给每个文件写 `<原文件>.bak` 备份。
-- 修复完成后**后端向所有 WS 客户端广播 `audit_log` 事件**（content 是 JSON 字符串，见 WS 协议）。
-
-## 6. 模型列表
+## 5. 模型列表
 
 ### `GET /api/models?type=&base=&provider=`（20s 超时）
 - 使用**当前激活厂商的 api_key**（来自 settings 快照）；query 仅覆盖 `type`/`base_url`/`provider`。
@@ -235,16 +163,7 @@ Report JSON：
 ```
 - **前端注意**：给「新厂商」取模型前必须先把该厂商设为激活（`settings_set`），否则用的是旧激活厂商的 key（见 06）。
 
-## 7. 其他（旧界面 HTMX 片段，新前端不使用）
-
-| 路径 | 说明 |
-| --- | --- |
-| `GET /fragment/settings` | 设置弹窗 HTML |
-| `GET /fragment/files?path=` | 文件树 HTML |
-| `GET /fragment/audit?sev=` | 审计面板 HTML（运行中每 1.5s 自刷） |
-| `POST /fragment/audit/start` | 启动审计返回面板 |
-
-## 8. 通用约定
+## 6. 通用约定
 - 错误一律 `{"error":"中文说明"}` + 4xx/5xx。
 - 未登录：带 `Accept: application/json` → 401 纯文本「401 未登录」；否则 302 → `/login`。前端 `useApi` 始终带 `Accept: application/json`。
-- `GET /`：需要登录时返回 index.html（旧界面）。
+- `GET /`：需要登录时返回 Nuxt SPA；`/settings`、`/tools` 返回各自预渲染页面。

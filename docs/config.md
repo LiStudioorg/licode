@@ -45,7 +45,6 @@
 ├── system-prompt.md  系统提示词（可直接编辑，首次自动生成默认内容）
 ├── md/               附加提示词：递归读取里面所有 .md 追加到系统提示词（默认空）
 ├── skills/           技能（markdown，frontmatter: name/description）
-├── plugins/          WASM 插件（见 docs/plugins.md）
 ├── mcp/              MCP 服务器配置
 ├── sessions/         对话记录（实时保存，每会话一个 json）
 ├── logs/             日志
@@ -80,4 +79,4 @@
 }
 ```
 
-TUI 时代遗留说明：所有设置都可在网页端「设置」里实时修改并自动写回本文件，无需手改。
+所有设置都可在网页端「设置」里实时修改并自动写回本文件，无需手改。

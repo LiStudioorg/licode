@@ -6,21 +6,20 @@
 
 - Licode 是一个单二进制 Web 应用：Go 后端提供 HTTP/WebSocket/Agent(LLM) 全栈服务，前端为 Nuxt 编译后的静态资源，通过 `go:embed internal/web/nuxt` 嵌入二进制。
 - 入口 `main.go` → `cmd.Execute()` 直接启动 Web 服务器（无子命令）。
-- 核心模块：`cmd/`(HTTP 路由层)、`internal/agent/`(LLM Agent 与工具)、`internal/websocket/`(实时会话)、`internal/ai/`(LLM 客户端抽象)、`internal/settings/`、`internal/search/`(自建搜索)、`internal/backup/`。
+- 核心模块：`cmd/`(HTTP 路由层)、`internal/agent/`(LLM Agent 与工具)、`internal/websocket/`(实时会话)、`internal/ai/`(LLM 客户端抽象)、`internal/settings/`、`internal/backup/`。
 - 运行数据保存在 `~/.licode/`（config.json、sessions/、session.key 等）。
 
 ## 硬性约束
 
 - **绝对禁止 nodejs**：不得在构建、开发或发布流程中引入/要求 node/npm/nuxt。前端产物 `internal/web/nuxt/` 的静态文件是预生成并已入库的，修改 `nuxtweb/` 下的 .vue 源码后**不要**重新运行 npm/build（除非用户明确授权），否则改动无法进入二进制。后端改动才是可交付路径。
 - 不使用全局可变状态（历史教训 `internal/agent/mcp.go` 已重写为无状态实现）。
-- 修改 `internal/search/` 的 URL 校验逻辑时注意 `service_test.go` 使用 127.0.0.1 的 httptest，私网拦截有测试逃生开关 `blockPrivateHosts`。
 
 ## 构建与验证命令
 
 ```bash
 go build ./...
 go vet ./...
-go test ./...        # 注意：internal/agent 的 TestAgentToolLoop 为既有失败，与本次改动无关
+go test ./...        # 全绿；无 node 相关依赖
 CGO_ENABLED=0 ./build.sh   # 9 平台静态编译，产物在 build/，全程纯 Go（无 node）
 ```
 

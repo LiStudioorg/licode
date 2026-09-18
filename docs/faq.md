@@ -2,7 +2,7 @@
 
 ## 在 Android / Termux 上运行？
 
-用 `build/api-gateway-linux-arm64`（静态 aarch64），或从发行版下载 linux-arm64 产物：
+用 `build/licode-linux-arm64`（静态 aarch64），或从发行版下载 linux-arm64 产物：
 
 ```bash
 chmod +x ./licode && ./licode --host 0.0.0.0 --port 8080
@@ -45,14 +45,10 @@ chmod +x ./licode && ./licode --host 0.0.0.0 --port 8080
 
 直接编辑 `~/.licode/system-prompt.md`（首次运行自动生成默认内容）；`~/.licode/md/` 下所有 .md 会递归附加为额外提示词。
 
-## 插件怎么开发
-
-见 [插件开发指南](plugins.md)。把编译好的 `.wasm` 放进 `~/.licode/plugins/<名字>/` 即自动热加载。
-
 ## 发行版本不是最新的？
 
 发行版（GitHub/Gitee Releases）可能滞后于仓库代码；要最新请 `./build.sh` 自己编译。
 
 ## 推送两个仓库
 
-`git push origin main` 会同时推到 GitHub 与 Gitee（origin 配了双 push URL）。GitHub 偶发挂起时可用 token 直推（见开发说明）。
+`git push origin main` 推送到 GitHub（LiStudioorg/licode）；Gitee 需另行添加远端。GitHub 偶发挂起时可临时用 token 直推。

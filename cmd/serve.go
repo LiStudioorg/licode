@@ -328,8 +328,7 @@ func runServe(opts *ServeOptions) error {
 	auth := newAuthState(authUser, authPass, authEnabled)
 	wsState := newWorkspace()
 
-	// 静态资源（CSS/JS/HTMX，全部 go:embed 打进二进制）统一走 /static/
-	staticServer := http.StripPrefix("/static/", http.FileServer(http.FS(web.StaticFS())))
+	// Nuxt 静态资源全部 go:embed 打进二进制，由「/」与「/_nuxt/」统一提供
 	mux := http.NewServeMux()
 	mux.Handle("/login", http.HandlerFunc(auth.handleLogin))
 	// 健康检查 / 就绪探针（供容器编排 / 负载均衡，不要求登录）
@@ -477,8 +476,6 @@ func runServe(opts *ServeOptions) error {
 			"counter": version.Parse(version.Current()),
 		})
 	})
-	// HTMX 片段：设置弹窗 / 文件树（服务器渲染 HTML）
-	registerFragmentRoutes(mux, auth, st, wsState, hub)
 	mux.HandleFunc("/api/models", func(w http.ResponseWriter, r *http.Request) {
 		if !auth.require(w, r) {
 			return
@@ -553,15 +550,6 @@ func runServe(opts *ServeOptions) error {
 			}
 		}
 		serveNuxtFile(w, r, nuxt, "index.html")
-	}))
-	mux.Handle("/static/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !auth.require(w, r) {
-			return
-		}
-		// 静态资源可缓存（版本变更时资源名不变但内容随二进制更新，
-		// 配合首页 no-store 保证刷新后引用到的是当前二进制内的文件）。
-		w.Header().Set("Cache-Control", "public, max-age=300")
-		staticServer.ServeHTTP(w, r)
 	}))
 	mux.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
 		if !auth.require(w, r) {

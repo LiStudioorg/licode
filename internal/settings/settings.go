@@ -268,7 +268,8 @@ func (s *Settings) NewClient() (ai.LLMClient, error) {
 
 // BuildAgent 根据设置构建一个完整的 Agent（含子代理、Skills、MCP、压缩）。
 // riskyToolDefaults 是默认需要用户确认（ask）的高风险工具名。
-var riskyToolDefaults = []string{"Shell", "Write", "Edit", "Delete", "Move", "WebFetch"}
+// 联网搜索（WebFetch）已移除，后续恢复该功能时需同步加回。
+var riskyToolDefaults = []string{"Shell", "Write", "Edit", "Delete", "Move"}
 
 // safeToolDefaults 只读、无副作用的内置工具，显式 allow（配合 "*"=ask 兜底）。
 var safeToolDefaults = []string{"Read", "ListDirectory", "Glob", "Grep"}

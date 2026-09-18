@@ -2,15 +2,15 @@
 
 ## 环境
 
-- Go ≥ 1.24（插件 wasmexport 需要；GOTOOLCHAIN=auto 会自动下载）
-- 纯 Go 依赖：bubbletea 已移除；当前仅 wazero、fsnotify、gorilla/websocket、cobra、以及 charmbracelet 无关的库
+- Go ≥ 1.22（go.mod 声明）
+- 纯 Go 依赖：fsnotify、gorilla/websocket、cobra、BurntSushi/toml；无 CGO
 
 ## 编译
 
 ```bash
 go build ./...        # 编译检查
-go test ./...         # 全部测试（含插件 wasm 集成测试）
-./build.sh            # 47 平台交叉编译（CGO_ENABLED=0，产物 build/api-gateway-*）
+go test ./...         # 全部测试
+./build.sh            # 9 平台交叉编译（CGO_ENABLED=0，产物 build/licode-*）
 ```
 
 ## 目录结构
@@ -27,10 +27,9 @@ go test ./...         # 全部测试（含插件 wasm 集成测试）
 │   ├── agent/          主 Agent、工具、子代理 DAG、压缩、MCP、Skills
 │   ├── session/        多会话 + 实时落盘
 │   ├── settings/       设置 + ~/.licode 数据目录
-│   ├── plugin/         WASM 插件（wazero + 热加载）
 │   ├── websocket/      Hub + 事件协议
 │   ├── version/        0.0.0.x 版本计数
-│   └── web/            go:embed 静态页面
+│   └── web/            go:embed Nuxt 前端产物与 CA 证书
 └── docs/               文档
 ```
 
@@ -38,7 +37,6 @@ go test ./...         # 全部测试（含插件 wasm 集成测试）
 
 - `internal/ai`：OpenAI SSE 流式与工具调用解析（mock 服务器）
 - `internal/agent`：工具循环、会话截断、子代理 DAG 顺序/环检测
-- `internal/plugin`：真实 wasip1 插件（echo/求和/读文件）端到端
 
 ## 设计要点
 

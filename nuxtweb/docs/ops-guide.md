@@ -26,7 +26,7 @@
 | 工具 | 版本要求 | 说明 |
 | --- | --- | --- |
 | Git | 任意 | 拉取后端源码 |
-| Go | ≥1.22（插件 wasmexport 需 1.24+） | 编译后端；国内需 `GOPROXY` |
+| Go | ≥1.22 | 编译后端；国内需 `GOPROXY` |
 | Node.js | `^22.18.0 || >=24.12.0` | 前端 fuxsto-design 的 engine 要求 |
 | npm | 随 Node | 前端依赖 |
 | （可选）Edge/Chrome | 任意 | 无头浏览器验证（puppeteer-core） |
@@ -97,11 +97,10 @@ git diff --name-status f3748a2 HEAD
 | --- | --- |
 | `cmd/serve.go` | 路由注册、WS 消息/事件处理、`/api/models`、认证 |
 | `cmd/files.go` | 文件 API 的请求/响应字段 |
-| `cmd/audit.go`、`internal/audit/*` | 审计 API 结构 |
 | `internal/websocket/websocket.go` | **WS 协议**（消息/事件类型、字段名）——变更要同步改前端 |
 | `internal/settings/settings.go` | **设置对象字段**（新增字段要在设置界面补） |
 | `internal/agent/*` | 新增工具（可能出现在 ask/工具块展示） |
-| `internal/web/static/app.js`、`templates/*.html` | 官方旧 UI 是怎么调新 API 的 → 照抄其请求/响应格式 |
+| `nuxtweb/pages/*.vue`、`nuxtweb/composables/*.ts` | 前端页面对 API/WS 的调用实现参考 |
 
 ### 4.3 如何判断「差异是否影响前端」
 
@@ -109,8 +108,8 @@ git diff --name-status f3748a2 HEAD
 
 1. **WS 协议变了没有？** grep `internal/websocket/websocket.go` 的 `Type*` / `Evt*` 常量、`ClientMessage` / `ServerEvent` 的 json tag。变了 → 改 `nuxtweb/composables/useLicode.ts` 的 `send()`/`handleEvent()`。
 2. **REST 变了没有？** 新增/删除 `mux.HandleFunc`；变了字段。前端 REST 调用在 `composables/useApi.ts` + 各 Panel 组件；`/api/**` 代理是通配的，**新增端点无需改代理配置**。
-3. **设置对象加了字段？** `internal/settings/settings.go` 的 `Settings` struct → 在 `设置页（pages/settings.vue）.vue` 补对应表单；同时保证 `settings_set` 仍是全量回传。
-4. **新功能（新模块/新 API 组）？** 参考官方旧 UI（`internal/web/static/app.js` + `templates/`）的实现方式，在 nuxtweb 里新增组件/页面，并在 `RightPanel.vue` 或 `TopBar.vue` 挂入口。
+3. **设置对象加了字段？** `internal/settings/settings.go` 的 `Settings` struct → 在 `pages/settings.vue` 补对应表单；同时保证 `settings_set` 仍是全量回传。
+4. **新功能（新模块/新 API 组）？** 参考 `nuxtweb/pages/` 现有页面实现，新增页面/组件并在 `SidebarNav.vue` 挂入口。
 5. **仅是内部实现/README/文档改动？** 前端无需改动。
 
 ---
@@ -137,13 +136,13 @@ git diff --name-status f3748a2 HEAD
 
 `pages/settings.vue`：
 - 在对应 tab（基础/厂商/高级）加表单控件，`v-model`/`:model-value` 绑定 `local.xxx`。
-- **数字**字段记得在 `buildSettings()` 的 `NUM_KEYS` 里加并 `Number(...)` 转换；**逗号列表**（数组）用 `splitList`；**JSON**（如 mcp）用文本域 parse。
+- **数字**字段记得在 `buildSettings()` 的 `NUM_KEYS` 里加并 `Number(...)` 转换；**逗号列表**（数组）用 `splitList`；**MCP 服务器**用卡片式增删，不用 JSON 文本域。
 - 永远**全量回传**：`save()` 用 `JSON.parse(JSON.stringify(state.settings))` 起步再覆盖字段，切勿只发局部。
 
 
 1. 新增 `components/XxxPanel.vue`，用 `useApi` 调新端点。
 2. `RightPanel.vue` 的 `tabs` 数组加 `{ label:'xxx', value:'xxx' }`；在面板切换处加 `<XxxPanel v-else-if="state.rightTab === 'xxx'" />`；把 `'xxx'` 加进 `useLicode.ts` 的 `rightTab` 联合类型。
-3. 需要常驻事件（如审计完成广播）时在 `handleEvent` 里加 `case` 并 `state.xxxTick++` 触发面板刷新。
+3. 需要常驻事件时在 `handleEvent` 里加 `case` 并 `state.xxxTick++` 触发面板刷新。
 
 ### 5.5 改动后端本地副本并重新编译
 
