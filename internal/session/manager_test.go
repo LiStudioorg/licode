@@ -1,7 +1,9 @@
 package session
 
 import (
+	"os"
 	"testing"
+	"time"
 
 	"licode/internal/ai"
 )
@@ -51,5 +53,33 @@ func TestManagerBranchInvalid(t *testing.T) {
 	m := NewManager("", false)
 	if _, ok := m.Branch("nope", 0); ok {
 		t.Fatal("branch from missing parent should fail")
+	}
+}
+
+func TestManagerLoadsRecentFirst(t *testing.T) {
+	dir := t.TempDir()
+	oldFile := dir + "/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.json"
+	newFile := dir + "/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.json"
+	for _, item := range []struct{ file, id string }{
+		{oldFile, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+		{newFile, "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},
+	} {
+		s := NewSession(0)
+		s.Restore("测试", nil, "")
+		s.SetID(item.id)
+		if err := s.SaveToFile(item.file); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// 让 newFile 的修改时间更晚
+	old := time.Now().Add(-time.Hour)
+	_ = os.Chtimes(oldFile, old, old)
+
+	m := NewManager(dir, true)
+	if m.CurrentID() != "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" {
+		t.Fatalf("current = %s, want newest", m.CurrentID())
+	}
+	if got := m.List(); len(got) != 2 || got[0].ID != "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" {
+		t.Fatalf("order = %+v", got)
 	}
 }

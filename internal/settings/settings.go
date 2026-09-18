@@ -288,7 +288,7 @@ func (s *Settings) BuildAgent(client ai.LLMClient) *agent.Agent {
 	if pc.Provider == "" {
 		modelID = modelName
 	}
-	prompt := agent.BuildMainPrompt(BaseDir(), runtime.GOOS, time.Now().Format("2006-01-02"), modelName, modelID)
+	prompt := agent.BuildMainPrompt(agent.WorkspaceRoot(), runtime.GOOS, time.Now().Format("2006-01-02"), modelName, modelID)
 	ag := agent.NewAgent(client, prompt)
 	// 特性6：把 fsnotify 热加载的外部命令工具并入当前 Agent（动态增/删）。
 	ag.Tools.MergeFrom(agent.ExternalTools)

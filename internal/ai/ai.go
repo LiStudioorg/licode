@@ -87,11 +87,12 @@ type Usage struct {
 //   - Done:     the stream finished cleanly (Usage may be attached)
 //   - Error:    a fatal error aborted the stream
 type StreamEvent struct {
-	Content  string
-	ToolCall *ToolCall
-	Done     bool
-	Usage    *Usage
-	Error    error
+	Content   string
+	Reasoning string // 模型思考过程增量（reasoning_content / thinking / thought）
+	ToolCall  *ToolCall
+	Done      bool
+	Usage     *Usage
+	Error     error
 }
 
 // LLMClient is the unified interface implemented by every provider.

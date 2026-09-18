@@ -41,6 +41,7 @@ const (
 	EvtDone      = "done"
 	EvtError     = "error"
 	EvtStatus    = "status"
+	EvtReasoning = "reasoning"
 	EvtSettings  = "settings"
 	EvtAsk       = "ask"
 	EvtSessions  = "sessions"
@@ -186,12 +187,14 @@ func (h *Hub) ServeWS(w http.ResponseWriter, r *http.Request) {
 	h.register(c)
 
 	ctx, cancel := context.WithCancel(r.Context())
+	// 同步注册消息处理器：若放 goroutine 里，客户端在连接瞬间发来的
+	// 第一条消息（settings_get/sessions_get）会在注册前被 processMessages 丢弃。
+	if h.onConn != nil {
+		h.onConn(ctx, c)
+	}
 	go c.writePump(ctx)
 	go c.processMessages(ctx)
 
-	if h.onConn != nil {
-		go h.onConn(ctx, c)
-	}
 	c.readPump(ctx)
 
 	cancel()

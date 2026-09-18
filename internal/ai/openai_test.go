@@ -42,6 +42,10 @@ func mockOpenAIServer(t *testing.T, scenario string) *httptest.Server {
 			writeChunk(openaiDelta{Content: "你好，"}, "")
 			writeChunk(openaiDelta{Content: "世界"}, "")
 			fmt.Fprint(w, "data: [DONE]\n\n")
+		case "reasoning":
+			writeChunk(openaiDelta{ReasoningContent: "先想一下…"}, "")
+			writeChunk(openaiDelta{Content: "答案是 4"}, "")
+			fmt.Fprint(w, "data: [DONE]\n\n")
 		case "tools":
 			writeChunk(openaiDelta{Content: "我需要查询。"}, "")
 			// 分两次发送同一个工具调用的增量：第一次带名称与部分参数
@@ -85,6 +89,28 @@ func TestOpenAIChatStreamText(t *testing.T) {
 	}
 	if got != "你好，世界" {
 		t.Fatalf("expected 你好，世界, got %q", got)
+	}
+}
+
+func TestOpenAIChatStreamReasoning(t *testing.T) {
+	srv := mockOpenAIServer(t, "reasoning")
+	defer srv.Close()
+	p := &OpenAIProvider{baseURL: srv.URL + "/v1", apiKey: "test", model: "gpt-test"}
+
+	var reasoning, content string
+	err := p.ChatStream(context.Background(), ChatRequest{Model: "gpt-test"}, func(e StreamEvent) error {
+		reasoning += e.Reasoning
+		content += e.Content
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("ChatStream: %v", err)
+	}
+	if reasoning != "先想一下…" {
+		t.Fatalf("reasoning = %q", reasoning)
+	}
+	if content != "答案是 4" {
+		t.Fatalf("content = %q", content)
 	}
 }
 

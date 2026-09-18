@@ -159,6 +159,7 @@ function createStore() {
     messages: [] as ChatMessage[],
     busy: false,
     statusText: '',
+    reasoning: '',
     ask: null as AskInfo | null,
     settings: null as Settings | null,
     stats: emptyStats(),
@@ -316,6 +317,10 @@ function createStore() {
         }
         break
       }
+      case 'reasoning':
+        // 模型思考过程（DeepSeek/Claude/Gemini 等），只展示不持久化
+        state.reasoning += String(evt.content ?? '')
+        break
       case 'status':
         state.statusText = String(evt.content ?? '')
         break
@@ -370,6 +375,7 @@ function createStore() {
     if (text === '/clear' && !(attachments && attachments.length)) {
       state.messages = []
       state.statusText = ''
+      state.reasoning = ''
       state.ask = null
       send('message', { content: text })
       return
@@ -382,6 +388,7 @@ function createStore() {
     })
     ensureAssistant()
     state.busy = true
+    state.reasoning = ''
     state.statusText = '思考中…'
     send('message', {
       content: text,

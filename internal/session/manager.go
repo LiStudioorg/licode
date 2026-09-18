@@ -1,11 +1,13 @@
 package session
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"licode/internal/ai"
 )
@@ -55,21 +57,58 @@ func (m *Manager) loadExisting() {
 	if err != nil {
 		return
 	}
-	var ids []string
+	type rec struct {
+		id  string
+		mod int64
+	}
+	var recs []rec
 	for _, e := range entries {
 		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
 			continue
 		}
-		s, err := LoadSessionFile(filepath.Join(m.dir, e.Name()))
+		path := filepath.Join(m.dir, e.Name())
+		s, err := LoadSessionFile(path)
 		if err != nil {
 			continue
 		}
+		// 以文件名为准设置 ID：旧数据内部 ID 可能与文件名不一致，
+		// 按内部 ID 归档会导致多条会话互相覆盖、列表数量对不上。
+		s.SetID(strings.TrimSuffix(e.Name(), ".json"))
 		s.SetOnChange(func() { m.SaveSession(s.ID()) })
 		m.sessions[s.ID()] = s
-		ids = append(ids, s.ID())
+		mod := int64(0)
+		if fi, err := os.Stat(path); err == nil {
+			mod = fi.ModTime().UnixNano()
+		}
+		recs = append(recs, rec{id: s.ID(), mod: mod})
 	}
-	sort.Strings(ids)
+	// 最近的会话排最前，并默认选中它（重连/重启后继续上次的对话）
+	sort.Slice(recs, func(i, j int) bool { return recs[i].mod > recs[j].mod })
+	ids := make([]string, 0, len(recs))
+	for _, r := range recs {
+		ids = append(ids, r.id)
+	}
 	m.order = ids
+	if len(ids) > 0 {
+		m.current = ids[0]
+	}
+}
+
+// trashSessionFile 把会话文件移入会话目录下的 .trash/（避免误删丢数据）。
+func trashSessionFile(dir, id string) error {
+	src := filepath.Join(dir, id+".json")
+	if _, err := os.Stat(src); err != nil {
+		return nil
+	}
+	trash := filepath.Join(dir, ".trash")
+	if err := os.MkdirAll(trash, 0o700); err != nil {
+		return os.Remove(src)
+	}
+	dst := filepath.Join(trash, fmt.Sprintf("%s-%d.json", id, time.Now().Unix()))
+	if err := os.Rename(src, dst); err != nil {
+		return os.Remove(src)
+	}
+	return nil
 }
 
 // SaveAll 把所有会话写入对话记录目录。
@@ -130,7 +169,7 @@ func (m *Manager) New() *Session {
 	m.seq++
 	s.title = "新对话"
 	m.sessions[s.ID()] = s
-	m.order = append(m.order, s.ID())
+	m.order = append([]string{s.ID()}, m.order...) // 新会话置顶（列表按最近使用排序）
 	m.current = s.ID()
 	return s
 }
@@ -140,7 +179,7 @@ func (m *Manager) NewFromSession(s *Session) {
 	s.SetOnChange(func() { m.SaveSession(s.ID()) })
 	m.mu.Lock()
 	m.sessions[s.ID()] = s
-	m.order = append(m.order, s.ID())
+	m.order = append([]string{s.ID()}, m.order...)
 	m.current = s.ID()
 	m.mu.Unlock()
 }
@@ -191,7 +230,7 @@ func (m *Manager) Branch(parentID string, fromIndex int) (*Session, bool) {
 	b.SetOnChange(func() { m.SaveSession(b.ID()) })
 	b.messages = copied
 	m.sessions[b.ID()] = b
-	m.order = append(m.order, b.ID())
+	m.order = append([]string{b.ID()}, m.order...)
 	m.current = b.ID()
 	return b, true
 }
@@ -234,7 +273,8 @@ func (m *Manager) Delete(id string) {
 		return
 	}
 	delete(m.sessions, id)
-	_ = os.Remove(filepath.Join(m.dir, id+".json"))
+	// 移到 .trash/ 而不是直接删除：误删可从文件恢复
+	_ = trashSessionFile(m.dir, id)
 	for i, o := range m.order {
 		if o == id {
 			m.order = append(m.order[:i], m.order[i+1:]...)
@@ -243,7 +283,7 @@ func (m *Manager) Delete(id string) {
 	}
 	if m.current == id {
 		if len(m.order) > 0 {
-			m.current = m.order[len(m.order)-1]
+			m.current = m.order[0]
 		} else {
 			s := NewSession(0)
 			m.sessions[s.ID()] = s

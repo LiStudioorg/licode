@@ -17,6 +17,8 @@ import (
 	"strings"
 	"sync"
 	"unicode"
+
+	"licode/internal/agent"
 )
 
 // workspaceState 管理"工作目录"：文件浏览/编辑与 Agent 工具都基于该目录。
@@ -368,6 +370,7 @@ func handleWorkspace(w http.ResponseWriter, r *http.Request, ws *workspaceState)
 			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "路径无效"})
 			return
 		}
+		agent.SetWorkspaceRoot(ws.Root())
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "root": ws.Root()})
 	}
 }

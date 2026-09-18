@@ -46,6 +46,7 @@ func (p *GeminiProvider) httpClient() *http.Client {
 // ---- wire types -----------------------------------------------------------
 
 type geminiPart struct {
+	Thought bool `json:"thought,omitempty"`
 	Text             string          `json:"text,omitempty"`
 	FunctionCall     *geminiFuncCall `json:"functionCall,omitempty"`
 	FunctionResponse *geminiFuncResp `json:"functionResponse,omitempty"`
@@ -306,7 +307,11 @@ func (p *GeminiProvider) handleSSE(data []byte, usage *Usage, onEvent func(Strea
 		}
 		for _, part := range cand.Content.Parts {
 			if part.Text != "" {
-				if err := onEvent(StreamEvent{Content: part.Text}); err != nil {
+				ev := StreamEvent{Content: part.Text}
+				if part.Thought {
+					ev = StreamEvent{Reasoning: part.Text}
+				}
+				if err := onEvent(ev); err != nil {
 					return err
 				}
 			}

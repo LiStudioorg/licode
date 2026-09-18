@@ -66,8 +66,10 @@ type openaiChatReq struct {
 }
 
 type openaiDelta struct {
-	Content   string          `json:"content,omitempty"`
-	ToolCalls []aiToolCallReq `json:"tool_calls,omitempty"`
+	Content          string          `json:"content,omitempty"`
+	ReasoningContent string          `json:"reasoning_content,omitempty"`
+	Reasoning        string          `json:"reasoning,omitempty"`
+	ToolCalls        []aiToolCallReq `json:"tool_calls,omitempty"`
 }
 
 type openaiChoice struct {
@@ -259,6 +261,11 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, req ChatRequest, onEven
 		usage := &Usage{}
 		applyOpenAIUsage(chunk.Usage, usage)
 		for _, c := range chunk.Choices {
+			if c.Message.ReasoningContent != "" {
+				if err := onEvent(StreamEvent{Reasoning: c.Message.ReasoningContent}); err != nil {
+					return err
+				}
+			}
 			if c.Message.Content != "" {
 				if err := onEvent(StreamEvent{Content: c.Message.Content}); err != nil {
 					return err
@@ -353,6 +360,16 @@ func (p *OpenAIProvider) handleEvent(data []byte, acc map[int]*ToolCall, usage *
 	}
 	applyOpenAIUsage(chunk.Usage, usage)
 	for _, ch := range chunk.Choices {
+		if ch.Delta.ReasoningContent != "" {
+			if err := onEvent(StreamEvent{Reasoning: ch.Delta.ReasoningContent}); err != nil {
+				return err
+			}
+		}
+		if ch.Delta.Reasoning != "" {
+			if err := onEvent(StreamEvent{Reasoning: ch.Delta.Reasoning}); err != nil {
+				return err
+			}
+		}
 		if ch.Delta.Content != "" {
 			if err := onEvent(StreamEvent{Content: ch.Delta.Content}); err != nil {
 				return err

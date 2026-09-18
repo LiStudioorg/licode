@@ -43,6 +43,17 @@ function onRootClick(e: MouseEvent) {
           </p>
         </div>
 
+        <details
+          v-if="state.reasoning"
+          open
+          class="mb-3 rounded-xl border border-zinc-200 bg-zinc-50/80 p-3 dark:border-zinc-800 dark:bg-zinc-900/60"
+        >
+          <summary class="cursor-pointer select-none text-xs font-medium text-zinc-500">
+            思考过程{{ state.busy ? '（进行中…）' : '' }}
+          </summary>
+          <pre class="mt-2 whitespace-pre-wrap break-words font-sans text-xs leading-relaxed text-zinc-500">{{ state.reasoning }}</pre>
+        </details>
+
         <MessageItem v-for="m in state.messages" :key="m.id" :msg="m" />
 
         <div v-if="state.busy && state.statusText" class="mt-2 flex items-center gap-2 text-xs text-zinc-500 dark:text-zinc-400">

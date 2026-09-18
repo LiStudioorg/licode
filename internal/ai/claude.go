@@ -336,6 +336,7 @@ func (p *ClaudeProvider) handleEvent(name string, data []byte, toolUse map[int]*
 			Delta struct {
 				Type        string `json:"type"`
 				Text        string `json:"text"`
+				Thinking    string `json:"thinking"`
 				PartialJSON string `json:"partial_json"`
 			} `json:"delta"`
 		}
@@ -343,6 +344,12 @@ func (p *ClaudeProvider) handleEvent(name string, data []byte, toolUse map[int]*
 			return err
 		}
 		switch ev.Delta.Type {
+		case "thinking_delta":
+			if ev.Delta.Thinking != "" {
+				if err := onEvent(StreamEvent{Reasoning: ev.Delta.Thinking}); err != nil {
+					return err
+				}
+			}
 		case "text_delta":
 			if ev.Delta.Text != "" {
 				if err := onEvent(StreamEvent{Content: ev.Delta.Text}); err != nil {

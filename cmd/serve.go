@@ -148,7 +148,7 @@ type connState struct {
 
 func newConnState(sessionsDir string) *connState {
 	return &connState{
-		sessions: session.NewManager(sessionsDir, false),
+		sessions: session.NewManager(sessionsDir, true),
 		pending:  map[string]chan bool{},
 		askTool:  map[string]string{},
 	}
@@ -250,6 +250,7 @@ func runServe(opts *ServeOptions) error {
 				})
 
 			case websocket.TypeSessionDelete:
+				log.Printf("删除会话: %s（已移入 sessions/.trash/）", msg.SessionID)
 				cs.sessions.Delete(msg.SessionID)
 				_ = cs.sessions.SaveAll()
 				c.SendEvent(websocket.ServerEvent{
@@ -299,19 +300,23 @@ func runServe(opts *ServeOptions) error {
 				msgCtx, msgCancel := context.WithCancel(ctx)
 				cs.interruptCancel = msgCancel
 				cs.mu.Unlock()
-				defer func() {
-					cs.mu.Lock()
-					cs.busy = false
-					cs.interruptCancel = nil
-					cs.mu.Unlock()
-					msgCancel()
-				}()
 				atts := make([]ai.Attachment, 0, len(msg.Attachments))
 				for _, a := range msg.Attachments {
 					atts = append(atts, ai.Attachment{Type: a.Type, MIMEType: a.MIMEType, Data: a.Data, Filename: a.Filename})
 				}
-				runServerAgentWithAttachments(msgCtx, st, cs, c, msg.Content, msg.System, atts)
-				_ = cs.sessions.SaveAll()
+				// Agent 在独立 goroutine 中运行：消息处理是串行的，若在这里同步执行，
+				// 停止/工具确认（interrupt/ask_reply）会排在队列里永远处理不到。
+				go func() {
+					defer func() {
+						cs.mu.Lock()
+						cs.busy = false
+						cs.interruptCancel = nil
+						cs.mu.Unlock()
+						msgCancel()
+					}()
+					runServerAgentWithAttachments(msgCtx, st, cs, c, msg.Content, msg.System, atts)
+					_ = cs.sessions.SaveAll()
+				}()
 
 			case websocket.TypeInterrupt:
 				cs.mu.Lock()
@@ -328,6 +333,7 @@ func runServe(opts *ServeOptions) error {
 	authUser, authPass, authEnabled := ResolveAuth(opts.Username, opts.Password)
 	auth := newAuthState(authUser, authPass, authEnabled)
 	wsState := newWorkspace()
+	agent.SetWorkspaceRoot(wsState.Root())
 
 	// Nuxt 静态资源全部 go:embed 打进二进制，由「/」与「/_nuxt/」统一提供
 	mux := http.NewServeMux()
@@ -483,6 +489,7 @@ func runServe(opts *ServeOptions) error {
 		}
 		st.mu.RLock()
 		cfg := st.settings.AIConfig()
+		snap := st.settings.Snapshot()
 		st.mu.RUnlock()
 		q := r.URL.Query()
 		if t := q.Get("type"); t != "" {
@@ -493,6 +500,49 @@ func runServe(opts *ServeOptions) error {
 		}
 		if p := q.Get("provider"); p != "" {
 			cfg.Provider = p
+		}
+		// POST：直接带目标厂商的地址/密钥取列表，无需临时切换激活厂商
+		//（旧的切换方式会触发 settings 回传，把设置页正在编辑的内容冲掉）。
+		if r.Method == http.MethodPost {
+			var req struct {
+				Type     string `json:"type"`
+				BaseURL  string `json:"base_url"`
+				APIKey   string `json:"api_key"`
+				Provider string `json:"provider"`
+				Model    string `json:"model"`
+			}
+			if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&req); err != nil {
+				writeJSON(w, http.StatusBadRequest, map[string]any{"error": "请求格式错误"})
+				return
+			}
+			if req.Type != "" {
+				cfg.Type = req.Type
+			}
+			if req.BaseURL != "" {
+				cfg.BaseURL = req.BaseURL
+			}
+			if req.Provider != "" {
+				cfg.Provider = req.Provider
+			}
+			if req.Model != "" {
+				cfg.Model = req.Model
+			}
+			if req.APIKey != "" && req.APIKey != settings.MaskedAPIKey {
+				cfg.APIKey = req.APIKey
+			} else {
+				// 前端拿到的是掩码密钥：按厂商名回查真实密钥，查不到再用激活厂商的
+				key := ""
+				for _, p := range snap.Providers {
+					if p.Provider == req.Provider {
+						key = p.APIKey
+						break
+					}
+				}
+				if key == "" {
+					key = snap.APIKey
+				}
+				cfg.APIKey = key
+			}
 		}
 		ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
 		defer cancel()
@@ -778,6 +828,8 @@ func runServerAgentWithAttachments(ctx context.Context, st *serverState, cs *con
 			c.SendEvent(websocket.ServerEvent{Type: websocket.EvtDone})
 		} else if e.Type == agent.EventError {
 			c.SendEvent(websocket.ServerEvent{Type: websocket.EvtError, Error: e.Error})
+		} else if e.Type == agent.EventReasoning {
+			c.SendEvent(websocket.ServerEvent{Type: websocket.EvtReasoning, Content: e.Content})
 		} else if e.Type == agent.EventStatus {
 			c.SendEvent(websocket.ServerEvent{Type: websocket.EvtStatus, Content: e.Content})
 		}

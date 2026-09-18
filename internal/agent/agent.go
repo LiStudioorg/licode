@@ -34,6 +34,8 @@ const (
 	EventError EventType = "error"
 	// EventStatus reports transient status like iteration count.
 	EventStatus EventType = "status"
+	// EventReasoning streams model reasoning/thinking deltas (not persisted).
+	EventReasoning EventType = "reasoning"
 	// EventAsk asks the user to approve a tool call (permission=ask).
 	EventAsk EventType = "ask"
 	// EventSettings carries updated runtime settings (from a remote server).
@@ -396,6 +398,8 @@ func (a *Agent) RunWithAttachments(ctx context.Context, input string, attachment
 		done := false
 		callErr := a.Client.ChatStream(ctx, req, func(evt ai.StreamEvent) error {
 			switch {
+			case evt.Reasoning != "":
+				onEvent(Event{Type: EventReasoning, Content: evt.Reasoning})
 			case evt.Content != "":
 				asst.Content += evt.Content
 				onEvent(Event{Type: EventText, Content: evt.Content})
@@ -414,7 +418,10 @@ func (a *Agent) RunWithAttachments(ctx context.Context, input string, attachment
 			return nil
 		})
 		if callErr != nil {
-			onEvent(Event{Type: EventError, Error: callErr.Error()})
+			// 用户主动停止（context canceled）不算错误，不推错误事件
+			if !errors.Is(callErr, context.Canceled) {
+				onEvent(Event{Type: EventError, Error: callErr.Error()})
+			}
 			return callErr
 		}
 		_ = done

@@ -101,6 +101,37 @@ const mcpServers = ref<any[]>([])
 const fetching = ref('')
 const saving = ref(false)
 const shells = ref<string[]>([])
+const workspaceRoot = ref('')
+const workspaceSaving = ref(false)
+
+async function loadWorkspace() {
+  try {
+    const d = await useApi<{ root: string }>('/api/workspace')
+    workspaceRoot.value = d.root || ''
+  } catch {}
+}
+
+async function applyWorkspace() {
+  const p = (workspaceRoot.value || '').trim()
+  if (!p) {
+    Message.warning('请填写工作目录')
+    return
+  }
+  workspaceSaving.value = true
+  try {
+    const d = await useApi<{ root: string }>('/api/workspace', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ path: p }),
+    })
+    workspaceRoot.value = d.root || p
+    Message.success('工作目录已切换（AI 工具立即生效）')
+  } catch (e: any) {
+    Message.error(e?.message || '设置失败')
+  } finally {
+    workspaceSaving.value = false
+  }
+}
 
 const navItems = [
   { id: 'basic', label: '基础', icon: SlidersHorizontal },
@@ -172,37 +203,46 @@ function openProvider(p?: ProviderRow) {
   editOpen.value = true
 }
 
-function commitProvider() {
+// applyEditToLocal 把弹窗中的厂商修改合并回表单（返回是否成功）。
+// 点击「保存设置」时会自动调用，避免弹窗里的获取结果/编辑丢失。
+function applyEditToLocal(): boolean {
+  if (!editOpen.value) return true
   const p = editP.value
   const id = (p.provider || p.name || p.type || 'custom').trim().toLowerCase().replace(/\s+/g, '-')
+  const hasContent = !!(p.name || p.base_url || p.api_key || (p.models && p.models.length))
   if (!id) {
+    if (editNew.value && !hasContent) return true // 空白的新建弹窗：忽略，不阻塞保存
     Message.warning('请填写厂商名称')
-    return
+    return false
   }
   const list = providers.value.slice()
   if (editNew.value) {
     if (list.some((x) => x.provider === id)) {
       Message.error('厂商标识已存在')
-      return
+      return false
     }
     p.provider = id
-    list.push(p)
-    Message.success('厂商已添加，点击保存生效')
+    list.push(JSON.parse(JSON.stringify(p)))
   } else {
     const i = list.findIndex((x) => x.provider === editKey.value)
-    if (i < 0) return
+    if (i < 0) return false
     p.provider = id
-    list[i] = p
+    list[i] = JSON.parse(JSON.stringify(p))
     if (local.value.provider === editKey.value) {
       local.value.provider = id
       local.value.base_url = p.base_url || ''
       local.value.api_key = p.api_key || ''
       if (p.model) local.value.model = p.model
     }
-    Message.success('厂商已更新，点击保存生效')
   }
   local.value.providers = list
+  return true
+}
+
+function commitProvider() {
+  if (!applyEditToLocal()) return
   editOpen.value = false
+  Message.success(editNew.value ? '厂商已添加，点击保存生效' : '厂商已更新，点击保存生效')
 }
 
 // 用户自定义 CA证书管理（~/.licode/certs/）。
@@ -275,12 +315,23 @@ onMounted(() => {
   licode.connect()
   loadShells()
   loadCAs()
+  loadWorkspace()
   resetLocal()
 })
 
+let inited = false
+let pendingSave = false
 watch(
   () => state.settings,
-  () => resetLocal(),
+  () => {
+    // 仅在首次加载或本次页面主动保存后从服务端同步，避免后台设置事件
+    // （如临时取模型、其他页面操作）把正在编辑的表单冲掉。
+    if (state.settings && (!inited || pendingSave)) {
+      inited = true
+      pendingSave = false
+      resetLocal()
+    }
+  },
 )
 
 watch(tab, (v) => {
@@ -316,7 +367,7 @@ function activate(p: ProviderRow) {
   local.value.base_url = p.base_url || ''
   local.value.api_key = p.api_key || ''
   if (p.model) local.value.model = p.model
-  Message.info(`已切换激活厂商为「${p.name || p.provider}」，点击保存生效`)
+  Message.info(`已切换当前厂商为「${p.name || p.provider}」，点击保存生效`)
 }
 
 async function fetchModels(p: ProviderRow) {
@@ -324,27 +375,21 @@ async function fetchModels(p: ProviderRow) {
     Message.warning('请先填写该厂商的 API 地址')
     return
   }
-  saving.value = true
-  const base = state.settings
-  const prev = base ? JSON.parse(JSON.stringify(base)) : null
-  const switched = !!(base && base.provider !== p.provider)
+  fetching.value = p.provider
   try {
-    // /api/models 使用「激活厂商」的 key。目标厂商不是当前激活时，临时切到该厂商获取列表，
-    // 完成后立即还原原激活厂商（不改变已保存的设置）。
-    if (switched && prev) {
-      licode.saveSettings({
-        ...prev,
+    // 直接把目标厂商的地址/密钥发给后端取列表，不切换到该厂商，
+    // 因此不会触发设置回传把当前编辑的内容冲掉。
+    const res = await useApi<{ models: string[] }>('/api/models', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        type: p.type,
+        base_url: p.base_url,
+        api_key: p.api_key,
         provider: p.provider,
-        base_url: p.base_url || '',
-        api_key: p.api_key || '',
-        model: p.model || prev.model || '',
-      })
-    }
-    fetching.value = p.provider
-    const q = new URLSearchParams()
-    if (p.type) q.set('type', p.type)
-    if (p.base_url) q.set('base', p.base_url)
-    const res = await useApi<{ models: string[] }>(`/api/models?${q.toString()}`)
+        model: p.model,
+      }),
+    })
     const fetched = res.models || []
     if (!p.models) p.models = []
     for (const m of fetched) if (!p.models.includes(m)) p.models.push(m)
@@ -353,9 +398,7 @@ async function fetchModels(p: ProviderRow) {
   } catch (e: any) {
     Message.error(e?.message || '获取模型失败')
   } finally {
-    if (switched && prev) licode.saveSettings(prev)
     fetching.value = ''
-    saving.value = false
   }
 }
 
@@ -369,6 +412,7 @@ function removeProvider(p: ProviderRow) {
 }
 
 function buildSettings(): Settings {
+  if (!applyEditToLocal()) throw new Error('厂商信息不完整')
   const s = JSON.parse(JSON.stringify(local.value)) as Settings
   for (const k of NUM_KEYS) s[k] = Number(s[k]) || 0
   s.streaming = !!s.streaming
@@ -425,6 +469,7 @@ function save() {
     Message.error(e?.message || '保存失败')
     return
   }
+  pendingSave = true
   licode.saveSettings(s)
   Message.success('设置已保存')
 }
@@ -838,6 +883,8 @@ const toolSourceBadge: Record<string, string> = {
         <template v-else-if="tab === 'providers'">
           <div class="mb-4 flex items-center justify-between">
             <h2 class="text-lg font-semibold">AI 厂商</h2>
+            <span class="hidden text-xs text-zinc-400 sm:inline">同一时间使用一个厂商，可在对话输入框随时切换</span>
+            <span class="flex-1" />
             <Button size="sm" variant="outline" :icon="Plus" @click="openProvider()">添加厂商</Button>
           </div>
           <div v-if="!providers.length" class="rounded-xl border border-dashed border-zinc-300 p-8 text-center text-sm text-zinc-400 dark:border-zinc-700">
@@ -875,7 +922,7 @@ const toolSourceBadge: Record<string, string> = {
                   variant="secondary"
                   @click="activate(p)"
                 >
-                  激活
+                  设为当前
                 </Button>
                 <Chip v-else size="sm" variant="secondary">当前使用</Chip>
                 <span class="flex-1" />
@@ -1006,6 +1053,16 @@ const toolSourceBadge: Record<string, string> = {
         <!-- 高级 -->
         <template v-else-if="tab === 'advanced'">
           <h2 class="mb-4 text-lg font-semibold">高级设置</h2>
+          <div class="mb-4 rounded-xl border border-zinc-200 p-4 dark:border-zinc-800">
+            <div class="mb-2 flex items-center justify-between">
+              <span class="text-sm font-medium">AI 工作目录</span>
+              <span class="text-[10px] text-zinc-400">文件读写边界、相对路径与 Shell 的基准目录</span>
+            </div>
+            <div class="flex items-center gap-2">
+              <Input v-model="workspaceRoot" size="sm" class="flex-1" placeholder="如 /data/data/com.termux/files/home/project" @keydown.enter.prevent="applyWorkspace" />
+              <Button size="sm" variant="outline" :loading="workspaceSaving" @click="applyWorkspace">切换</Button>
+            </div>
+          </div>
           <div class="grid grid-cols-2 gap-3">
             <label class="col-span-2 space-y-1">
               <span class="text-xs text-zinc-500">Shell 路径</span>

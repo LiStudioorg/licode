@@ -219,7 +219,7 @@ function doClear() {
       <!-- 模型选择：位于输入框上方 -->
       <div class="mb-2 flex min-w-0 flex-wrap items-center gap-2">
         <Select
-          v-if="providerOptions.length > 1"
+          v-if="providerOptions.length"
           :model-value="state.settings?.provider || ''"
           :options="providerOptions"
           size="sm"
