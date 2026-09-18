@@ -302,6 +302,9 @@ type Agent struct {
 	Permissions map[string]string
 	// Ask 在 permission=ask 时被调用，返回 true 表示允许执行。
 	Ask func(ctx context.Context, toolName, args string) (bool, error)
+	// AutoAllowPaths 允许工具访问工作目录之外路径时不再逐次询问
+	// （信任该设置的用户显式开启；默认关闭，外部路径仍需逐次确认）。
+	AutoAllowPaths bool
 	// Compaction 上下文超限时用 LLM 压缩旧对话。
 	Compaction bool
 	// RedactSecrets 对工具输出做敏感信息脱敏。
@@ -316,6 +319,20 @@ type Agent struct {
 	TraceID string
 	// Usage 累计本次运行消耗的 token（含缓存读取）。
 	Usage ai.Usage
+	// mcpMgr 由 BuildAgent 装配的 MCP 连接管理器；一次运行结束后由调用方
+	// 通过 Close 释放，避免 stdio 子进程泄漏。
+	mcpMgr *MCPManager
+}
+
+// SetMCPManager 绑定 MCP 连接管理器（settings.BuildAgent 装配时调用）。
+func (a *Agent) SetMCPManager(m *MCPManager) { a.mcpMgr = m }
+
+// Close 释放 Agent 持有的外部资源（MCP 子进程等）。运行结束后必须调用。
+func (a *Agent) Close() {
+	if a.mcpMgr != nil {
+		a.mcpMgr.Close()
+		a.mcpMgr = nil
+	}
 }
 
 func NewAgent(client ai.LLMClient, system string) *Agent {
@@ -346,9 +363,16 @@ func (a *Agent) RunWithAttachments(ctx context.Context, input string, attachment
 	if a.TraceID == "" {
 		a.TraceID = logx.NewTraceID()
 	}
+	// Timeout 硬超时在此处统一生效（主 Agent 与子代理共用该字段语义）。
+	if a.Timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, time.Duration(a.Timeout)*time.Second)
+		defer cancel()
+	}
 	logx.AgentStart(a.TraceID, a.Name)
 	a.Session.Add(ai.Message{Role: ai.RoleUser, Content: input, Attachments: attachments})
 
+	var asst ai.Message
 	for iter := 1; iter <= a.MaxIterations; iter++ {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -368,7 +392,7 @@ func (a *Agent) RunWithAttachments(ctx context.Context, input string, attachment
 			Temperature: a.Temperature,
 		}
 
-		var asst ai.Message
+		asst = ai.Message{}
 		asst.Role = ai.RoleAssistant
 		done := false
 		callErr := a.Client.ChatStream(ctx, req, func(evt ai.StreamEvent) error {
@@ -425,6 +449,15 @@ func (a *Agent) RunWithAttachments(ctx context.Context, input string, attachment
 			a.Session.Add(ai.Message{Role: ai.RoleTool, ToolCallID: tc.ID, ToolName: tc.Function.Name, Content: out})
 		}
 	}
+	// 达到迭代上限时助手消息可能带有未执行完的 tool_calls；补写合成结果，
+	// 避免会话里留下"有调用无结果"的孤儿消息导致后续 API 请求被 400 拒绝。
+	for _, tc := range asst.ToolCalls {
+		a.Session.Add(ai.Message{
+			Role: ai.RoleTool, ToolCallID: tc.ID, ToolName: tc.Function.Name,
+			Content: "TOOL ERROR: reached max iterations without a final answer",
+		})
+	}
+	onEvent(Event{Type: EventError, Error: "已达最大迭代次数，未得到最终回答"})
 	return errors.New("max iterations reached without a final answer")
 }
 
@@ -469,6 +502,16 @@ func (a *Agent) runTool(ctx context.Context, tc ai.ToolCall, onEvent func(Event)
 		if max <= 0 {
 			max = 3
 		}
+	}
+	// 注入工作目录之外路径的人工确认钩子：工具访问外部路径时先问用户。
+	if a.Ask != nil {
+		ctx = withPathApprover(ctx, func(ctx context.Context, path, tool string) bool {
+			if a.AutoAllowPaths {
+				return true
+			}
+			ok, err := a.Ask(ctx, "Path", tool+": "+path)
+			return err == nil && ok
+		})
 	}
 	exec := func() (string, error) {
 		return a.Tools.Execute(ctx, tc.Function.Name, []byte(tc.Function.Arguments))

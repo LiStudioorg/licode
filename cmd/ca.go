@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -87,9 +88,12 @@ func handleCAUpload(w http.ResponseWriter, r *http.Request) {
 		name += ".pem"
 	}
 
-	buf := make([]byte, 4<<20)
-	n, _ := file.Read(buf)
-	content := buf[:n]
+	// io.ReadAll 而非单次 Read：multipart 文件的单次 Read 可能只返回部分内容。
+	content, err := io.ReadAll(io.LimitReader(file, 4<<20))
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "读取上传内容失败"})
+		return
+	}
 	if len(pemSubjects(content)) == 0 {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "不是有效的 PEM 证书文件"})
 		return

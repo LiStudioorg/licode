@@ -104,7 +104,8 @@ func ReadMDPrompts(dir string) (string, error) {
 }
 
 // LogFile 返回追加写入的日志文件句柄（~/.licode/logs/licode.log）。
+// 权限 0600：日志可能包含工具调用输出，不能对同机其他用户可读。
 func LogFile() (*os.File, error) {
 	_ = EnsureDirs()
-	return os.OpenFile(filepath.Join(LogsDir(), "licode.log"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	return os.OpenFile(filepath.Join(LogsDir(), "licode.log"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
 }

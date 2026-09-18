@@ -21,7 +21,7 @@ func registerFragmentRoutes(mux *http.ServeMux, a *authState, st *serverState, w
 			return
 		}
 		st.mu.RLock()
-		s := st.settings.Snapshot()
+		s := st.settings.Snapshot().Masked()
 		st.mu.RUnlock()
 		renderHTMLFragment(w, "frag_settings.html", settingsFormData(s))
 	})

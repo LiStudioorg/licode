@@ -41,20 +41,20 @@ func handleReady(st *serverState) http.HandlerFunc {
 
 		problems := []string{}
 
-		// LLM 服务商地址连通性（TCP 探测，15s 缓存避免频繁探测）
+		// LLM 服务商地址连通性（TCP 探测；成功结果缓存 15s，
+		// 失败不缓存以便服务恢复后 /ready 立即翻转）
 		mu.Lock()
 		cached := probeAt != nil && time.Since(*probeAt) < 15*time.Second
 		mu.Unlock()
-		if !cached {
-			if base := s.BaseURL; base != "" {
-				if !tcpProbeFromURL(base) {
-					problems = append(problems, "llm_unreachable")
-				}
+		if !cached && s.BaseURL != "" {
+			if tcpProbeFromURL(s.BaseURL) {
+				mu.Lock()
+				now := time.Now()
+				probeAt = &now
+				mu.Unlock()
+			} else {
+				problems = append(problems, "llm_unreachable")
 			}
-			mu.Lock()
-			now := time.Now()
-			probeAt = &now
-			mu.Unlock()
 		}
 
 		// Docker 沙箱状态（仅启用沙箱时检查）

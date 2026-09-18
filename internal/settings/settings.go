@@ -267,6 +267,9 @@ func (s *Settings) NewClient() (ai.LLMClient, error) {
 // riskyToolDefaults 是默认需要用户确认（ask）的高风险工具名。
 var riskyToolDefaults = []string{"Shell", "Write", "Edit", "Delete", "Move", "WebFetch"}
 
+// safeToolDefaults 只读、无副作用的内置工具，显式 allow（配合 "*"=ask 兜底）。
+var safeToolDefaults = []string{"Read", "ListDirectory", "Glob", "Grep"}
+
 func (s *Settings) BuildAgent(client ai.LLMClient) *agent.Agent {
 	// 特性1：语义缓存（问题-结果缓存，命中即返回，跳过 LLM 调用）
 	if s.CacheEnabled {
@@ -300,11 +303,13 @@ func (s *Settings) BuildAgent(client ai.LLMClient) *agent.Agent {
 	ag.ToolAutoRetry = s.ToolAutoRetry
 	ag.ToolRetryMax = s.ToolRetryMax
 	ag.Shell = agent.ShellConfig{Path: s.ShellPath, Sandbox: s.Sandbox, Image: s.SandboxImage}
-	if s.MaxCtxTokens > 0 {
-		ag.Session.SetMaxTokens(s.MaxCtxTokens)
+	// 安全默认：未知工具（MCP、外部热加载命令、WASM 插件）一律先 "ask"，
+	// 只读工具显式放行，高风险工具强制 "ask"。防止未配置任何工具规则时
+	// 模型经提示注入通过 MCP/外部工具自主执行任意操作。
+	ag.Permissions["*"] = "ask"
+	for _, t := range safeToolDefaults {
+		ag.Permissions[t] = "allow"
 	}
-	// 安全默认：先把高风险工具默认设为 "ask"（需用户确认），后面的显式配置可覆盖，
-	// 防止未配置任何工具规则时模型经提示注入自主执行 Shell、改写文件或抓取网页。
 	for _, t := range riskyToolDefaults {
 		ag.Permissions[t] = "ask"
 	}
@@ -325,7 +330,11 @@ func (s *Settings) BuildAgent(client ai.LLMClient) *agent.Agent {
 		ag.RegisterSubAgents(agent.DefaultSubAgentSpecs(client, ag.Shell, s.SubTimeout))
 	}
 	agent.RegisterSkills(ag.Tools, agent.LoadSkills(agent.SkillDirs()...))
-	_, _ = agent.RegisterMCPServers(ag.Tools, s.MCPServers)
+	// MCP 连接管理器绑定到本 Agent，由调用方在运行结束后 Close，
+	// 避免每条消息 spawn 的 stdio 子进程存活到进程退出。
+	if mgr, err := agent.RegisterMCPServers(ag.Tools, s.MCPServers); err == nil && mgr != nil {
+		ag.SetMCPManager(mgr)
+	}
 	// WASM 插件（wazero 沙箱，运行时热加载）
 	for _, p := range plugin.Default.Plugins() {
 		pp := p
@@ -385,7 +394,14 @@ func (s *Settings) Snapshot() Settings {
 	if s.DNS != nil {
 		servers := make([]dnsclient.Server, len(s.DNS.Servers))
 		copy(servers, s.DNS.Servers)
-		out.DNS = &dnsclient.Config{Servers: servers}
+		d := &dnsclient.Config{Servers: servers, Concurrency: s.DNS.Concurrency, TimeoutMS: s.DNS.TimeoutMS}
+		if s.DNS.HostOverrides != nil {
+			d.HostOverrides = make(map[string]string, len(s.DNS.HostOverrides))
+			for k, v := range s.DNS.HostOverrides {
+				d.HostOverrides[k] = v
+			}
+		}
+		out.DNS = d
 	}
 	for k, v := range s.ToolRules {
 		out.ToolRules[k] = v
@@ -426,4 +442,45 @@ func ParseToolList(s string) []string {
 		}
 	}
 	return out
+}
+
+// MaskedAPIKey 是 API 密钥在面向浏览器的快照里的占位符。真实密钥不出服务器；
+// 前端原样回传该占位符时，applySettings 用旧值还原，用户填新值则正常保存。
+const MaskedAPIKey = "********"
+
+// Masked 返回密钥已替换为 MaskedAPIKey 的快照（深拷贝，安全下发到浏览器）。
+func (s Settings) Masked() Settings {
+	out := s
+	if out.APIKey != "" {
+		out.APIKey = MaskedAPIKey
+	}
+	if len(out.Providers) > 0 {
+		out.Providers = copyProviders(out.Providers)
+		for i := range out.Providers {
+			if out.Providers[i].APIKey != "" {
+				out.Providers[i].APIKey = MaskedAPIKey
+			}
+		}
+	}
+	return out
+}
+
+// RestoreMaskedKeys 把 prev 里的真实密钥填回本设置中仍是 MaskedAPIKey 占位符的
+// 字段（顶层 + 按 Provider 名匹配）。新填的密钥不受影响。
+func (s *Settings) RestoreMaskedKeys(prev Settings) {
+	if s.APIKey == MaskedAPIKey {
+		s.APIKey = prev.APIKey
+	}
+	for i := range s.Providers {
+		if s.Providers[i].APIKey != MaskedAPIKey {
+			continue
+		}
+		s.Providers[i].APIKey = ""
+		for _, p := range prev.Providers {
+			if p.Provider == s.Providers[i].Provider {
+				s.Providers[i].APIKey = p.APIKey
+				break
+			}
+		}
+	}
 }

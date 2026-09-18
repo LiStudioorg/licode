@@ -156,6 +156,10 @@ func handleSaveFile(w http.ResponseWriter, r *http.Request, ws *workspaceState) 
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "请求格式错误"})
 		return
 	}
+	if strings.TrimSpace(body.Path) == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "路径不能为空"})
+		return
+	}
 	abs, err := ws.resolveWriteAbs(body.Path)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "路径无效"})
@@ -178,7 +182,14 @@ func handleMkdir(w http.ResponseWriter, r *http.Request, ws *workspaceState) {
 	var body struct {
 		Path string `json:"path"`
 	}
-	_ = json.NewDecoder(r.Body).Decode(&body)
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "请求格式错误"})
+		return
+	}
+	if strings.TrimSpace(body.Path) == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "路径不能为空"})
+		return
+	}
 	abs, err := ws.resolveWriteAbs(body.Path)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "路径无效"})
@@ -199,7 +210,15 @@ func handleDeleteFile(w http.ResponseWriter, r *http.Request, ws *workspaceState
 		Path      string `json:"path"`
 		Recursive bool   `json:"recursive"`
 	}
-	_ = json.NewDecoder(r.Body).Decode(&body)
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "请求格式错误"})
+		return
+	}
+	// 空 path 会解析为工作区根目录：绝不能允许一次请求清空整个工作区。
+	if strings.TrimSpace(body.Path) == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "路径不能为空"})
+		return
+	}
 	abs, err := ws.fsPath(body.Path)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "路径无效"})
@@ -232,6 +251,10 @@ func handleChmod(w http.ResponseWriter, r *http.Request, ws *workspaceState) {
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "请求格式错误"})
+		return
+	}
+	if strings.TrimSpace(body.Path) == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "路径不能为空"})
 		return
 	}
 	abs, err := ws.fsPath(body.Path)
@@ -273,6 +296,10 @@ func handleChown(w http.ResponseWriter, r *http.Request, ws *workspaceState) {
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "请求格式错误"})
+		return
+	}
+	if strings.TrimSpace(body.Path) == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "路径不能为空"})
 		return
 	}
 	abs, err := ws.fsPath(body.Path)

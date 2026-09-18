@@ -47,7 +47,7 @@ type ToolWatcher struct {
 	dir    string
 	reg    *Registry
 	mu     sync.Mutex
-	loaded map[string]bool
+	loaded map[string]string // 文件路径 -> 已注册的工具名
 	watch  *fsnotify.Watcher
 	stop   chan struct{}
 	once   sync.Once
@@ -64,7 +64,7 @@ func StartToolWatcher(dir string, reg *Registry, initNow bool) (*ToolWatcher, er
 	t := &ToolWatcher{
 		dir:    dir,
 		reg:    reg,
-		loaded: map[string]bool{},
+		loaded: map[string]string{},
 		watch:  w,
 		stop:   make(chan struct{}),
 	}
@@ -102,11 +102,14 @@ func (t *ToolWatcher) run() {
 }
 
 func (t *ToolWatcher) handle(path string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
 	if _, err := os.Stat(path); os.IsNotExist(err) {
-		// 文件被删除 → 卸载以该文件定义的工具
-		def, err := readCommandToolDef(path)
-		if err == nil && def.Name != "" {
-			t.reg.Unregister(def.Name)
+		// 文件已删除：文件内容读不到了，只能凭此前记录的"路径->工具名"
+		// 反查并卸载（否则删除的定义永远卸不掉）。
+		if name, ok := t.loaded[path]; ok {
+			t.reg.Unregister(name)
+			delete(t.loaded, path)
 		}
 		return
 	}
@@ -117,7 +120,12 @@ func (t *ToolWatcher) handle(path string) {
 	if def.Name == "" || def.Command == "" {
 		return
 	}
+	// 同一文件改名（name 变化）时先卸载旧名字。
+	if old, ok := t.loaded[path]; ok && old != def.Name {
+		t.reg.Unregister(old)
+	}
 	t.reg.Register(toolFromCommand(def))
+	t.loaded[path] = def.Name
 }
 
 // loadAll 加载目录中当前所有工具定义。

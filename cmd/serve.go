@@ -131,8 +131,8 @@ type serverState struct {
 	mu           sync.RWMutex
 	settings     settings.Settings
 	client       ai.LLMClient
-	shuttingDown bool           // 收到关停信号后置位，拒绝新连接
-	rag *rag.Index // 特性5：项目源码轻量 RAG 索引（懒构建）
+	shuttingDown bool       // 收到关停信号后置位，拒绝新连接
+	rag          *rag.Index // 特性5：项目源码轻量 RAG 索引（懒构建）
 }
 
 // connState 保存每个连接独立的会话（多对话）与待确认的工具调用。
@@ -205,7 +205,7 @@ func runServe(opts *ServeOptions) error {
 			switch msg.Type {
 			case websocket.TypeSettingsGet:
 				c.SendEvent(websocket.ServerEvent{
-					Type: websocket.EvtSettings, Settings: st.settings.Snapshot(),
+					Type: websocket.EvtSettings, Settings: st.settings.Snapshot().Masked(),
 				})
 
 			case websocket.TypeSettingsSet:
@@ -216,7 +216,7 @@ func runServe(opts *ServeOptions) error {
 					_ = st.settings.Save("")
 				}
 				c.SendEvent(websocket.ServerEvent{
-					Type: websocket.EvtSettings, Settings: st.settings.Snapshot(),
+					Type: websocket.EvtSettings, Settings: st.settings.Snapshot().Masked(),
 				})
 
 			case websocket.TypeSessionsGet:
@@ -486,10 +486,9 @@ func runServe(opts *ServeOptions) error {
 		})
 	})
 	mux.HandleFunc("/api/auth", func(w http.ResponseWriter, r *http.Request) {
-		// 登录信息不需要认证即可查询（用于页面提示）
+		// 登录信息不需要认证即可查询（仅暴露是否启用，不泄露用户名）。
 		writeJSON(w, http.StatusOK, map[string]any{
 			"enabled":          auth.enabled,
-			"username":         auth.user,
 			"default_username": DefaultUsername,
 		})
 	})
@@ -637,6 +636,10 @@ func applyServerSettings(st *serverState, msg websocket.ClientMessage) error {
 	if err := json.Unmarshal(data, &s); err != nil {
 		return fmt.Errorf("设置格式错误: %w", err)
 	}
+	// 前端回传的密钥若仍是掩码占位符，用现有真实密钥还原（密钥不出服务器）。
+	st.mu.RLock()
+	s.RestoreMaskedKeys(st.settings)
+	st.mu.RUnlock()
 	s.EnsureDefaults()
 	if err := s.Validate(); err != nil {
 		return fmt.Errorf("设置无效: %v", err)
@@ -686,6 +689,12 @@ func runServerAgentWithAttachments(ctx context.Context, st *serverState, cs *con
 		ag.System = roleSystem + "\n" + ag.System
 	}
 	ag.Session = sess
+	// MaxCtxTokens 必须落在真实会话上（BuildAgent 里的临时会话已被上面的
+	// 赋值覆盖，若不重设则上下文窗口保护会静默失效）。
+	if s.MaxCtxTokens > 0 {
+		sess.SetMaxTokens(s.MaxCtxTokens)
+	}
+	defer ag.Close()
 	ag.Ask = func(ctx context.Context, toolName, args string) (bool, error) {
 		if s.AutoAllow || sess.AlwaysAllowed(toolName) {
 			return true, nil
@@ -747,55 +756,6 @@ func runServerAgentWithAttachments(ctx context.Context, st *serverState, cs *con
 		}
 		return nil
 	})
-}
-
-// runServerAgent 在当前设置下运行一次 Agent，流式回传事件。
-func runServerAgent(ctx context.Context, st *serverState, cs *connState, c *websocket.Client, content, roleSystem string) {
-	runServerAgentWithAttachments(ctx, st, cs, c, content, roleSystem, nil)
-}
-
-// sessionStats 估算会话 token 用量并附带提供商/模型/上下文/缓存统计。
-func sessionStats(s *session.Session) map[string]any {
-	messages := s.Messages()
-	tokens := 0
-	for _, m := range messages {
-		tokens += session.EstimateTokens(m.Content)
-		for _, tc := range m.ToolCalls {
-			tokens += session.EstimateTokens(tc.Function.Arguments)
-		}
-	}
-	maxTok := s.MaxTokens()
-	ctxPct := 0
-	if maxTok > 0 && tokens > 0 {
-		ctxPct = int(float64(tokens) / float64(maxTok) * 100)
-		if ctxPct > 100 {
-			ctxPct = 100
-		}
-		if ctxPct < 1 {
-			ctxPct = 1
-		}
-	}
-	u := s.Usage()
-	hit, hitRate := 0, 0
-	if u.CachedTokens > 0 {
-		hit = u.CachedTokens
-	}
-	if in := u.InputTokens + u.CachedTokens; in > 0 {
-		hitRate = int(float64(hit) / float64(in) * 100)
-	}
-	return map[string]any{
-		"messages":         len(messages),
-		"context_tokens":   tokens,
-		"context_max":      maxTok,
-		"context_pct":      ctxPct,
-		"provider":         "",
-		"model":            "",
-		"conversation_in":  u.InputTokens,
-		"conversation_out": u.OutputTokens,
-		"usage_cached":     hit,
-		"cache_hit_rate":   hitRate,
-		"always_allow":     s.AlwaysAllowedList(),
-	}
 }
 
 // autoTitle 从第一条用户消息生成对话标题。
@@ -877,25 +837,4 @@ func securityHeaders(next http.Handler, tls bool) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
-}
-
-func mapEventType(t agent.EventType) string {
-	switch t {
-	case agent.EventText:
-		return websocket.EvtDelta
-	case agent.EventToolStart:
-		return websocket.EvtToolStart
-	case agent.EventToolDone:
-		return websocket.EvtToolDone
-	case agent.EventDone:
-		return websocket.EvtDone
-	case agent.EventError:
-		return websocket.EvtError
-	case agent.EventStatus:
-		return websocket.EvtStatus
-	case agent.EventAsk:
-		return websocket.EvtAsk
-	default:
-		return websocket.EvtStatus
-	}
 }

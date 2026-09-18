@@ -308,6 +308,17 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, req ChatRequest, onEven
 			return err
 		}
 	}
+	// 部分兼容端点以 [DONE] 结束但不发送 finish_reason；若此时仍有累积的
+	// 工具调用，必须补发，否则整个调用会被静默丢弃。
+	if len(acc) > 0 {
+		for _, call := range sortedToolCalls(acc) {
+			if call.Function.Name != "" {
+				if err := onEvent(StreamEvent{ToolCall: call}); err != nil {
+					return err
+				}
+			}
+		}
+	}
 	return onEvent(StreamEvent{Done: true, Usage: usage})
 }
 
@@ -374,7 +385,11 @@ func (p *OpenAIProvider) handleEvent(data []byte, acc map[int]*ToolCall, usage *
 					}
 				}
 			}
-			acc = map[int]*ToolCall{}
+			// 原地清空调用方传入的 map（重新赋值只改局部绑定，调用方
+			// 的累积数据不会被清掉，会导致流结束后补发重复调用）。
+			for k := range acc {
+				delete(acc, k)
+			}
 		}
 	}
 	return nil

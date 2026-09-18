@@ -26,6 +26,10 @@ type SubAgentSpec struct {
 	Timeout       int    // 硬超时（秒，0=不限制）
 	Sandbox       bool   // 使用 Docker 沙箱
 	SandboxImage  string // 沙箱镜像
+	// permissions/ask 由 RegisterSubAgents 从主 Agent 继承：
+	// 子代理绝不能绕过主 Agent 的工具权限与人工确认门禁。
+	permissions map[string]string
+	ask         func(ctx context.Context, toolName, args string) (bool, error)
 }
 
 // buildAgent materializes a full Agent (own session, prompt, tool set).
@@ -34,7 +38,9 @@ func (s SubAgentSpec) buildAgent() *Agent {
 	a.Name = s.Name
 	a.Timeout = s.Timeout
 	a.Shell = ShellConfig{Path: s.ShellPath, Sandbox: s.Sandbox, Image: s.SandboxImage}
-	if len(s.Tools) > 0 {
+	a.Permissions = s.permissions
+	a.Ask = s.ask
+	if s.Tools != nil {
 		full := NewRegistry()
 		RegisterDefaultTools(full, a.Shell)
 		keep := map[string]bool{}
@@ -244,6 +250,12 @@ func (a *Agent) RegisterSubAgents(specs []SubAgentSpec) {
 		return
 	}
 	a.SubAgents = specs
+	// 子代理继承主 Agent 的工具权限与确认通道，杜绝经 Dispatch 绕过
+	// Shell/Write/Edit 等 ask 门禁的旁路。
+	for i := range a.SubAgents {
+		a.SubAgents[i].permissions = a.Permissions
+		a.SubAgents[i].ask = a.Ask
+	}
 	names := make([]string, 0, len(specs))
 	for _, s := range specs {
 		names = append(names, s.Name)

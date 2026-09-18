@@ -8,7 +8,10 @@ import (
 	"context"
 	"encoding/json"
 	"log"
+	"net"
 	"net/http"
+	"net/url"
+	"strings"
 	"sync"
 
 	"github.com/gorilla/websocket"
@@ -106,11 +109,31 @@ var upgrader = websocket.Upgrader{
 	ReadBufferSize:  4096,
 	WriteBufferSize: 4096,
 	CheckOrigin: func(r *http.Request) bool {
-		// licode 为本地自托管工具，可能经代理/局域网 IP/反代访问，
-		// 此时 Origin 与服务端看到的 Host 常不一致。放宽源校验以避免
-		// WebSocket 被误拒（表现为前端一直"已断开"、无法新建对话）。
-		return true
+		// 无 Origin（curl/脚本/移动 App）放行；浏览器请求必须同源，
+		// 防止任意网页通过 ws:// 直连本地服务（未启用登录时等同匿名 RCE）。
+		// 经反代/局域网 IP 访问时浏览器 Origin 与 Host 一致，不会误拒。
+		origin := r.Header.Get("Origin")
+		if origin == "" {
+			return true
+		}
+		return originMatchesHost(origin, r.Host)
 	},
+}
+
+// originMatchesHost 校验 Origin 与请求 Host 是否同源（兼容默认端口的差异）。
+func originMatchesHost(origin, host string) bool {
+	u, err := url.Parse(origin)
+	if err != nil || u.Host == "" {
+		return false
+	}
+	if strings.EqualFold(u.Host, host) {
+		return true
+	}
+	h := host
+	if hh, _, e := net.SplitHostPort(host); e == nil {
+		h = hh
+	}
+	return strings.EqualFold(u.Hostname(), h)
 }
 
 // Handler is called with each client that connects. The Hub does not know
@@ -143,7 +166,8 @@ func (h *Hub) unregister(c *Client) {
 	h.mu.Lock()
 	delete(h.clients, c)
 	h.mu.Unlock()
-	close(c.send)
+	// 注意：不 close(c.send)。断开后 Agent 端的回调可能仍在写该 channel，
+	// close 会触发 send-on-closed-channel panic；writePump 由 ctx 取消退出。
 }
 
 func (h *Hub) Count() int {
@@ -246,6 +270,9 @@ func (c *Client) writePump(ctx context.Context) {
 func (c *Client) readPump(ctx context.Context) {
 	defer c.conn.Close()
 	defer c.cancel()
+	// 读循环退出后不会再有消息入队；关闭队列让 processMessages 随之退出，
+	// 否则每条连接泄漏一个常驻 goroutine（连带整个 connState 无法回收）。
+	defer close(c.msgQueue)
 	for {
 		_, data, err := c.conn.ReadMessage()
 		if err != nil {
@@ -258,7 +285,7 @@ func (c *Client) readPump(ctx context.Context) {
 		select {
 		case c.msgQueue <- msg:
 		default:
-			c.send <- mustMarshal(ServerEvent{
+			c.SendEvent(ServerEvent{
 				Type:  EvtError,
 				Error: "消息队列已满，请稍候",
 			})
@@ -272,11 +299,6 @@ func (c *Client) processMessages(ctx context.Context) {
 			c.onUserMessage(ctx, msg)
 		}
 	}
-}
-
-func mustMarshal(evt ServerEvent) []byte {
-	data, _ := json.Marshal(evt)
-	return data
 }
 
 // OnUserMessage lets the server attach a handler for every client message.

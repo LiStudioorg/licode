@@ -76,10 +76,13 @@ func buildMockAgent(script []func(req mockReq) []mockStep) *Agent {
 }
 
 func TestAgentToolLoop(t *testing.T) {
+	// 工具路径校验只允许工作目录内的文件（安全约束），测试用相对路径。
+	const testFile = "licode_agent_test_tmp.txt"
+	t.Cleanup(func() { _ = os.Remove(testFile) })
 	// 第一步：要求调用 Write；第二步：给最终回答。
 	ag := buildMockAgent([]func(req mockReq) []mockStep{
 		func(req mockReq) []mockStep {
-			return []mockStep{{toolName: "Write", args: `{"path":"/tmp/licode_test.txt","content":"hello"}`}}
+			return []mockStep{{toolName: "Write", args: `{"path":"` + testFile + `","content":"hello"}`}}
 		},
 		func(req mockReq) []mockStep {
 			return []mockStep{{content: "已写入"}}
@@ -99,7 +102,7 @@ func TestAgentToolLoop(t *testing.T) {
 		t.Fatalf("expected final answer, got %q", got.String())
 	}
 	// 工具确实执行了：文件应存在
-	if !fileExists("/tmp/licode_test.txt") {
+	if !fileExists(testFile) {
 		t.Fatal("Write tool did not actually write the file")
 	}
 	// 会话中应包含 tool 消息（回填给模型）

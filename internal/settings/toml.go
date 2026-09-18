@@ -48,7 +48,6 @@ func GenerateTOML(path string, c TOMLConfig) error {
 		"[server]\n" +
 		"host = \"" + c.Server.Host + "\"\n" +
 		"port = " + itoa(c.Server.Port) + "\n" +
-		"addr = \"\"\n" +
 		"username = \"" + c.Server.Username + "\"\n" +
 		"password = \"\"\n" +
 		"https = false\n" +

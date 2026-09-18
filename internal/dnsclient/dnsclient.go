@@ -183,6 +183,7 @@ func newDNSQuery(domain string, qtype uint16) []byte {
 func (w *dnsWire) skipName() {
 	for {
 		if w.pos >= len(w.data) {
+			w.pos = len(w.data)
 			return
 		}
 		b := w.data[w.pos]
@@ -192,39 +193,67 @@ func (w *dnsWire) skipName() {
 		}
 		if b&0xc0 == 0xc0 {
 			w.pos += 2
+			if w.pos > len(w.data) {
+				w.pos = len(w.data)
+			}
 			return
 		}
 		w.pos += int(b) + 1
 	}
 }
 
-func (w *dnsWire) readUint16() uint16 {
+func (w *dnsWire) readUint16() (uint16, bool) {
+	if w.pos+2 > len(w.data) {
+		return 0, false
+	}
 	v := binary.BigEndian.Uint16(w.data[w.pos : w.pos+2])
 	w.pos += 2
-	return v
+	return v, true
 }
 
-func (w *dnsWire) readUint32() uint32 {
+func (w *dnsWire) readUint32() (uint32, bool) {
+	if w.pos+4 > len(w.data) {
+		return 0, false
+	}
 	v := binary.BigEndian.Uint32(w.data[w.pos : w.pos+4])
 	w.pos += 4
-	return v
+	return v, true
 }
 
+// parseDNSResponse 解析 DNS 响应中的 A/AAAA 记录。
+// 响应来自网络（DoH 允许明文 http），任何位置都必须先做边界检查，
+// 否则畸形/被劫持的响应会导致切片越界 panic 崩掉整个进程。
 func parseDNSResponse(data []byte, qtype uint16) ([]net.IP, error) {
 	if len(data) < 12 {
 		return nil, fmt.Errorf("DNS 响应过短")
 	}
 	w := &dnsWire{data: data, pos: 12}
 	w.skipName()
-	w.pos += 4
+	w.pos += 4 // QTYPE + QCLASS
 	var ips []net.IP
 	ancount := binary.BigEndian.Uint16(data[6:8])
 	for i := 0; i < int(ancount); i++ {
+		if w.pos >= len(w.data) {
+			break
+		}
 		w.skipName()
-		rt := w.readUint16()
-		w.pos += 2
-		w.readUint32()
-		rdlen := int(w.readUint16())
+		rt, ok := w.readUint16()
+		if !ok {
+			break
+		}
+		if _, ok := w.readUint16(); !ok { // class
+			break
+		}
+		if _, ok := w.readUint32(); !ok { // ttl
+			break
+		}
+		rdlen, ok := w.readUint16()
+		if !ok {
+			break
+		}
+		if w.pos+int(rdlen) > len(w.data) {
+			break
+		}
 		if rt == 1 && qtype == 1 && rdlen == 4 {
 			ip := net.IPv4(w.data[w.pos], w.data[w.pos+1], w.data[w.pos+2], w.data[w.pos+3])
 			ips = append(ips, ip)
@@ -233,7 +262,7 @@ func parseDNSResponse(data []byte, qtype uint16) ([]net.IP, error) {
 			copy(ip, w.data[w.pos:w.pos+16])
 			ips = append(ips, ip)
 		}
-		w.pos += rdlen
+		w.pos += int(rdlen)
 	}
 	return ips, nil
 }

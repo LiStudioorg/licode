@@ -156,12 +156,13 @@ func (s *Session) SetID(id string) {
 
 // fileRecord 是会话的磁盘存档格式。
 type fileRecord struct {
-	ID       string       `json:"id"`
-	Title    string       `json:"title"`
-	Summary  string       `json:"summary"`
-	MaxTok   int          `json:"max_tokens"`
-	Messages []ai.Message `json:"messages"`
-	Usage    ai.Usage     `json:"usage"`
+	ID          string       `json:"id"`
+	Title       string       `json:"title"`
+	Summary     string       `json:"summary"`
+	MaxTok      int          `json:"max_tokens"`
+	Messages    []ai.Message `json:"messages"`
+	Usage       ai.Usage     `json:"usage"`
+	AlwaysAllow []string     `json:"always_allow,omitempty"`
 }
 
 // SaveToFile 将会话写入磁盘（对话记录）。
@@ -170,6 +171,11 @@ func (s *Session) SaveToFile(path string) error {
 	rec := fileRecord{ID: s.id, Title: s.title, Summary: s.summary, MaxTok: s.maxTok, Usage: s.usage}
 	rec.Messages = make([]ai.Message, len(s.messages))
 	copy(rec.Messages, s.messages)
+	for name, allow := range s.alwaysAllow {
+		if allow {
+			rec.AlwaysAllow = append(rec.AlwaysAllow, name)
+		}
+	}
 	s.mu.Unlock()
 	data, err := json.MarshalIndent(rec, "", "  ")
 	if err != nil {
@@ -194,6 +200,9 @@ func LoadSessionFile(path string) (*Session, error) {
 	s.summary = rec.Summary
 	s.usage = rec.Usage
 	s.messages = rec.Messages
+	for _, name := range rec.AlwaysAllow {
+		s.alwaysAllow[name] = true
+	}
 	return s, nil
 }
 
@@ -292,6 +301,11 @@ func (s *Session) MessagesForLLM(system string) []ai.Message {
 	// Reverse to restore chronological order.
 	for i, j := 0, len(tail)-1; i < j; i, j = i+1, j-1 {
 		tail[i], tail[j] = tail[j], tail[i]
+	}
+	// 截断点若落在 assistant(tool_calls) 与 tool 结果之间，会留下"孤儿 tool
+	// 消息"，OpenAI 等协议会直接 400。丢弃开头失去父调用的 tool 结果。
+	for len(tail) > 0 && tail[0].Role == ai.RoleTool {
+		tail = tail[1:]
 	}
 	if summary != "" {
 		head := make([]ai.Message, 0, len(tail)+1)

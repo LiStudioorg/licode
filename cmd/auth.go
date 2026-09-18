@@ -26,7 +26,6 @@ const (
 	EnvPassword     = "LICODE_PASSWORD"
 	SessionCookie   = "licode_auth"
 	sessionLifetime = 7 * 24 * time.Hour
-	csrfCookie      = "licode_csrf"
 )
 
 // authState 是登录认证状态（基于会话 Cookie + HMAC 签名）。
@@ -35,6 +34,7 @@ type authState struct {
 	pass     string
 	enabled  bool
 	secret   []byte
+	key      []byte // 与密码绑定的 HMAC 密钥：改密码后旧会话全部失效
 	throttle *loginThrottle
 }
 
@@ -61,11 +61,18 @@ func newLoginThrottle() *loginThrottle {
 func (t *loginThrottle) allowed(ip string) bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	now := time.Now()
+	for k, e := range t.fails {
+		// 顺带清理过期条目，避免失败过的 IP 永久驻留内存。
+		if now.After(e.until) && e.count >= maxLoginFails {
+			delete(t.fails, k)
+		}
+	}
 	e := t.fails[ip]
 	if e == nil {
 		return true
 	}
-	if time.Now().After(e.until) {
+	if now.After(e.until) {
 		delete(t.fails, ip)
 		return true
 	}
@@ -116,9 +123,27 @@ func ResolveAuth(username, password string) (string, string, bool) {
 }
 
 // newAuthState 构造认证状态。HMAC 密钥持久化在 ~/.licode/session.key，
-// 保证会话 cookie 在服务器重启后仍然有效（自动登录）。
+// 保证会话 cookie 在服务器重启后仍然有效（自动登录）。签名密钥与密码绑定：
+// 修改密码后所有旧会话令牌自动失效。
 func newAuthState(user, pass string, enabled bool) *authState {
-	return &authState{user: user, pass: pass, enabled: enabled, secret: loadSecret(), throttle: newLoginThrottle()}
+	a := &authState{user: user, pass: pass, enabled: enabled, secret: loadSecret(), throttle: newLoginThrottle()}
+	a.key = a.deriveKey()
+	return a
+}
+
+func (a *authState) deriveKey() []byte {
+	h := sha256.New()
+	h.Write(a.secret)
+	h.Write([]byte(a.user))
+	h.Write([]byte(a.pass))
+	return h.Sum(nil)
+}
+
+// checkPassword 常量时间密码比较（比较哈希避免长度差异泄露）。
+func (a *authState) checkPassword(pass string) bool {
+	h1 := sha256.Sum256([]byte(a.pass))
+	h2 := sha256.Sum256([]byte(pass))
+	return hmac.Equal(h1[:], h2[:])
 }
 
 // loadSecret 读取或生成持久化会话密钥。
@@ -137,7 +162,7 @@ func loadSecret() []byte {
 // issueToken 签发签名会话令牌：base64url(用户名.过期时间戳.签名)。
 func (a *authState) issueToken(user string, exp time.Time) string {
 	raw := user + "." + strconv.FormatInt(exp.Unix(), 10)
-	mac := hmac.New(sha256.New, a.secret)
+	mac := hmac.New(sha256.New, a.key)
 	mac.Write([]byte(raw))
 	sig := hex.EncodeToString(mac.Sum(nil))
 	return base64.RawURLEncoding.EncodeToString([]byte(raw + "." + sig))
@@ -161,7 +186,7 @@ func (a *authState) verifyToken(token string) (string, bool) {
 	if time.Now().Unix() > exp {
 		return "", false
 	}
-	mac := hmac.New(sha256.New, a.secret)
+	mac := hmac.New(sha256.New, a.key)
 	mac.Write([]byte(user + "." + expStr))
 	if !hmac.Equal(mac.Sum(nil), mustHex(sig)) {
 		return "", false
@@ -248,7 +273,7 @@ func (a *authState) handleLogin(w http.ResponseWriter, r *http.Request) {
 		}
 		user := r.FormValue("username")
 		pass := r.FormValue("password")
-		if user == a.user && pass == a.pass {
+		if user == a.user && a.checkPassword(pass) {
 			a.throttle.success(ip)
 			a.setSession(w, user, r.TLS != nil)
 			http.Redirect(w, r, "/", http.StatusFound)
@@ -264,42 +289,9 @@ func (a *authState) handleLogin(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
-	token := generateCSRFToken()
-	setCSRFCookie(w, token)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	_, _ = w.Write(login)
-}
-
-func generateCSRFToken() string {
-	b := make([]byte, 32)
-	_, _ = rand.Read(b)
-	return base64.RawURLEncoding.EncodeToString(b)
-}
-
-func setCSRFCookie(w http.ResponseWriter, token string) {
-	http.SetCookie(w, &http.Cookie{
-		Name:     csrfCookie,
-		Value:    token,
-		Path:     "/",
-		HttpOnly: false,
-		SameSite: http.SameSiteStrictMode,
-		MaxAge:   int(sessionLifetime.Seconds()),
-	})
-}
-
-// basicAuthValue 生成 Authorization: Basic 头值（供远程脚本等使用）。
-func basicAuthValue(user, pass string) string {
-	return "Basic " + base64.StdEncoding.EncodeToString([]byte(user+":"+pass))
-}
-
-// checkAuth 校验 HTTP Basic 认证；未启用认证时直接放行。
-func checkAuth(r *http.Request, user, pass string, enabled bool) bool {
-	if !enabled {
-		return true
-	}
-	u, p, ok := r.BasicAuth()
-	return ok && u == user && p == pass
 }
 
 func mustHex(s string) []byte {

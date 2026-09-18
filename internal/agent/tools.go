@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -16,7 +17,6 @@ import (
 var (
 	allowedCommandPattern = regexp.MustCompile(`^[a-zA-Z0-9_./-]+$`)
 	cachedWD              string
-	cachedHome            string
 	pathCacheOnce         sync.Once
 	pathCacheErr          error
 )
@@ -26,13 +26,31 @@ func initPathCache() {
 	if err == nil {
 		cachedWD = filepath.Clean(wd)
 	}
-	home, err := os.UserHomeDir()
-	if err == nil {
-		cachedHome = filepath.Clean(home)
-	}
 }
 
-func validateToolPath(path string) (string, error) {
+// pathApprover 是工作目录之外路径的人工确认钩子：返回 true 表示用户已批准
+// 本次访问（一次一个路径），false / 错误表示拒绝。由 Agent 在执行工具前注入。
+type pathApprover func(ctx context.Context, path, tool string) bool
+
+// approveCtxKey 用于向工具执行传递确认钩子。
+type approveCtxKey struct{}
+
+// withPathApprover 把路径确认钩子放入工具执行上下文。
+func withPathApprover(ctx context.Context, fn pathApprover) context.Context {
+	return context.WithValue(ctx, approveCtxKey{}, fn)
+}
+
+func getPathApprover(ctx context.Context) pathApprover {
+	if fn, ok := ctx.Value(approveCtxKey{}).(pathApprover); ok {
+		return fn
+	}
+	return nil
+}
+
+// ensurePathAllowed 校验路径：工作目录内直接放行；工作目录外先请求用户
+// 确认（弹窗会展示工具名与完整路径），批准后才放行。无确认通道时拒绝。
+// 路径中包含 ".." 一律拒绝（相对路径穿越没有合法场景）。
+func ensurePathAllowed(ctx context.Context, path, tool string) (string, error) {
 	if path == "" {
 		return "", fmt.Errorf("path required")
 	}
@@ -45,35 +63,73 @@ func validateToolPath(path string) (string, error) {
 	}
 	clean := filepath.Clean(abs)
 	pathCacheOnce.Do(initPathCache)
-	if cachedWD != "" {
-		rel, err := filepath.Rel(cachedWD, clean)
-		if err == nil && !strings.HasPrefix(rel, "..") && rel != ".." {
-			resolved, err := filepath.EvalSymlinks(clean)
-			if err != nil {
-				return "", err
-			}
-			cleanResolved := filepath.Clean(resolved)
-			rel2, err := filepath.Rel(cachedWD, cleanResolved)
-			if err == nil && !strings.HasPrefix(rel2, "..") && rel2 != ".." {
-				return cleanResolved, nil
-			}
-		}
+	if cachedWD == "" {
+		return "", fmt.Errorf("path outside allowed directories")
 	}
-	if cachedHome != "" {
-		rel, err := filepath.Rel(cachedHome, clean)
-		if err == nil && !strings.HasPrefix(rel, "..") && rel != ".." {
-			resolved, err := filepath.EvalSymlinks(clean)
-			if err != nil {
-				return "", err
-			}
-			cleanResolved := filepath.Clean(resolved)
-			rel2, err := filepath.Rel(cachedHome, cleanResolved)
-			if err == nil && !strings.HasPrefix(rel2, "..") && rel2 != ".." {
-				return cleanResolved, nil
-			}
-		}
+	inWorkdir := func(p string) bool {
+		rel, err := filepath.Rel(cachedWD, p)
+		return err == nil && !strings.HasPrefix(rel, "..") && rel != ".."
 	}
-	return "", fmt.Errorf("path outside allowed directories")
+	if !inWorkdir(clean) {
+		approve := getPathApprover(ctx)
+		if approve == nil || !approve(ctx, clean, tool) {
+			return "", fmt.Errorf("路径 %s 在工作目录之外，且未被用户批准（需要访问请让用户确认）", clean)
+		}
+		return clean, nil
+	}
+	// 工作目录内的符号链接解析：目标不存在（Write 新建文件）时校验最近
+	// 存在的父目录，防止经符号链接绕过边界检查，也让新建文件场景可用。
+	target := clean
+	if _, lerr := os.Lstat(clean); lerr != nil {
+		if !os.IsNotExist(lerr) {
+			return "", lerr
+		}
+		parent, perr := filepath.EvalSymlinks(filepath.Dir(clean))
+		if perr != nil {
+			return "", perr
+		}
+		target = filepath.Join(parent, filepath.Base(clean))
+	} else {
+		resolved, rerr := filepath.EvalSymlinks(clean)
+		if rerr != nil {
+			return "", rerr
+		}
+		target = resolved
+	}
+	cleanResolved := filepath.Clean(target)
+	if !inWorkdir(cleanResolved) {
+		// 符号链接指向工作目录之外：同样需要用户确认，放行真实目标。
+		approve := getPathApprover(ctx)
+		if approve == nil || !approve(ctx, cleanResolved, tool) {
+			return "", fmt.Errorf("路径 %s 经符号链接指向工作目录之外，且未被用户批准", cleanResolved)
+		}
+		return cleanResolved, nil
+	}
+	return cleanResolved, nil
+}
+
+// validateToolPath 兼容旧名：仅做工作目录边界校验（无确认通道的场景）。
+// 工具执行路径应使用 ensurePathAllowed 以获得用户确认能力。
+func validateToolPath(path string) (string, error) {
+	if path == "" {
+		return "", fmt.Errorf("path required")
+	}
+	if strings.Contains(path, "..") {
+		return "", fmt.Errorf("path contains ..")
+	}
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return "", err
+	}
+	pathCacheOnce.Do(initPathCache)
+	if cachedWD == "" {
+		return "", fmt.Errorf("path outside allowed directories")
+	}
+	rel, err := filepath.Rel(cachedWD, filepath.Clean(abs))
+	if err != nil || strings.HasPrefix(rel, "..") || rel == ".." {
+		return "", fmt.Errorf("path outside allowed directories")
+	}
+	return filepath.Clean(abs), nil
 }
 
 func strArg(args map[string]any, key string) string {
@@ -132,7 +188,7 @@ func RegisterDefaultTools(r *Registry, sh ShellConfig) {
 		},
 		Run: func(ctx context.Context, args map[string]any) (string, error) {
 			path := strArg(args, "path")
-			path, err := validateToolPath(path)
+			path, err := ensurePathAllowed(ctx, path, "Read")
 			if err != nil {
 				return "", err
 			}
@@ -189,7 +245,7 @@ func RegisterDefaultTools(r *Registry, sh ShellConfig) {
 		},
 		Run: func(ctx context.Context, args map[string]any) (string, error) {
 			path := strArg(args, "path")
-			path, err := validateToolPath(path)
+			path, err := ensurePathAllowed(ctx, path, "Write")
 			if err != nil {
 				return "", err
 			}
@@ -223,7 +279,7 @@ func RegisterDefaultTools(r *Registry, sh ShellConfig) {
 		},
 		Run: func(ctx context.Context, args map[string]any) (string, error) {
 			path := strArg(args, "path")
-			path, err := validateToolPath(path)
+			path, err := ensurePathAllowed(ctx, path, "Edit")
 			if err != nil {
 				return "", err
 			}
@@ -280,7 +336,7 @@ func RegisterDefaultTools(r *Registry, sh ShellConfig) {
 		},
 		Run: func(ctx context.Context, args map[string]any) (string, error) {
 			path := strArg(args, "path")
-			path, err := validateToolPath(path)
+			path, err := ensurePathAllowed(ctx, path, "ListDirectory")
 			if err != nil {
 				return "", err
 			}
@@ -328,11 +384,19 @@ func RegisterDefaultTools(r *Registry, sh ShellConfig) {
 			if root == "" {
 				root = "."
 			}
+			// 与 Read/Write 等工具保持一致的路径边界（默认 "." 即工作目录）。
+			if _, err := ensurePathAllowed(ctx, root, "Grep"); err != nil {
+				return "", fmt.Errorf("invalid path: %w", err)
+			}
 			if len(pattern) > 1000 {
 				return "", fmt.Errorf("pattern too long")
 			}
 			if strings.Count(pattern, "*") > 10 {
 				return "", fmt.Errorf("pattern too complex")
+			}
+			if _, err := exec.LookPath("rg"); err != nil {
+				// rg 不存在时回退到内置遍历搜索，避免工具整体不可用。
+				return grepFallback(ctx, pattern, include, root)
 			}
 			cmd := exec.CommandContext(ctx, "rg", "--line-number", "--no-heading", "-S")
 			if include != "" {
@@ -357,7 +421,7 @@ func RegisterDefaultTools(r *Registry, sh ShellConfig) {
 	// Glob - 按通配符查找文件
 	r.Register(Tool{
 		Name:        "Glob",
-		Description: "Find files by glob pattern, e.g. **/*.go or src/**/*.ts",
+		Description: "Find files by glob pattern, e.g. *.go, src/**/*.ts (supports ** for recursion)",
 		Schema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -377,7 +441,7 @@ func RegisterDefaultTools(r *Registry, sh ShellConfig) {
 				cleanPattern := filepath.Clean(absPattern)
 				rel, _ := filepath.Rel(cleanWD, cleanPattern)
 				if !strings.HasPrefix(rel, "..") && rel != ".." {
-					matches, err := filepath.Glob(pattern)
+					matches, err := globMatches(pattern)
 					if err != nil {
 						return "", err
 					}
@@ -414,13 +478,16 @@ func RegisterDefaultTools(r *Registry, sh ShellConfig) {
 			}
 			cwd := strArg(args, "cwd")
 			if cwd != "" {
-				validatedCwd, err := validateToolPath(cwd)
+				validatedCwd, err := ensurePathAllowed(ctx, cwd, "Shell")
 				if err != nil {
 					return "", fmt.Errorf("invalid cwd: %w", err)
 				}
 				cwd = validatedCwd
 			}
 			timeout := time.Duration(intArg(args, "timeout", 30)) * time.Second
+			if timeout <= 0 {
+				timeout = 30 * time.Second
+			}
 			if timeout > 300*time.Second {
 				timeout = 300 * time.Second
 			}
@@ -429,7 +496,13 @@ func RegisterDefaultTools(r *Registry, sh ShellConfig) {
 			var cmd *exec.Cmd
 			if sh.Sandbox {
 				// Docker 沙箱隔离执行：只读挂载工作区到 /work，命令在容器内运行。
+				// cwd 未指定时挂载当前工作目录，否则 -w /work 指向不存在的目录。
 				img := sh.Image
+				if cwd == "" {
+					if wd, werr := os.Getwd(); werr == nil {
+						cwd = wd
+					}
+				}
 				dargs := []string{"run", "--rm", "-i", "-w", "/work"}
 				if cwd != "" {
 					dargs = append(dargs, "-v", cwd+":/work:ro")
@@ -467,7 +540,7 @@ func RegisterDefaultTools(r *Registry, sh ShellConfig) {
 		},
 		Run: func(ctx context.Context, args map[string]any) (string, error) {
 			path := strArg(args, "path")
-			path, err := validateToolPath(path)
+			path, err := ensurePathAllowed(ctx, path, "Delete")
 			if err != nil {
 				return "", err
 			}
@@ -502,12 +575,12 @@ func RegisterDefaultTools(r *Registry, sh ShellConfig) {
 		},
 		Run: func(ctx context.Context, args map[string]any) (string, error) {
 			source := strArg(args, "source")
-			source, err := validateToolPath(source)
+			source, err := ensurePathAllowed(ctx, source, "Move")
 			if err != nil {
 				return "", err
 			}
 			dest := strArg(args, "dest")
-			dest, err = validateToolPath(dest)
+			dest, err = ensurePathAllowed(ctx, dest, "Move")
 			if err != nil {
 				return "", err
 			}
@@ -546,4 +619,119 @@ func safeCommand(command string) bool {
 		}
 	}
 	return true
+}
+
+// grepFallback 在系统缺少 rg 时内置遍历搜索（结果上限与截断与 rg 路径一致）。
+func grepFallback(ctx context.Context, pattern, include, root string) (string, error) {
+	re, err := regexp.Compile(pattern)
+	if err != nil {
+		return "", fmt.Errorf("invalid pattern: %w", err)
+	}
+	skipDirs := map[string]bool{".git": true, "node_modules": true, "vendor": true}
+	var sb strings.Builder
+	matches := 0
+	root = filepath.Clean(root)
+	stop := ctx.Err()
+	_ = filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
+		if stop != nil || ctx.Err() != nil {
+			return fs.SkipAll
+		}
+		if err != nil {
+			return nil
+		}
+		if d.IsDir() {
+			if p != root && skipDirs[d.Name()] {
+				return fs.SkipDir
+			}
+			return nil
+		}
+		if include != "" {
+			if ok, gerr := filepath.Match(include, d.Name()); gerr != nil || !ok {
+				return nil
+			}
+		}
+		data, rerr := os.ReadFile(p)
+		if rerr != nil || len(data) > 8<<20 {
+			return nil
+		}
+		for i, line := range strings.Split(string(data), "\n") {
+			if re.MatchString(line) {
+				fmt.Fprintf(&sb, "%s:%d:%s\n", p, i+1, line)
+				matches++
+				if matches >= 1000 || sb.Len() > 30000 {
+					sb.WriteString("...(truncated)")
+					return fs.SkipAll
+				}
+			}
+		}
+		return nil
+	})
+	if ctx.Err() != nil {
+		return "", ctx.Err()
+	}
+	if matches == 0 {
+		return "(no matches)", nil
+	}
+	return sb.String(), nil
+}
+
+// globMatches 支持普通 glob 与 "**" 递归通配（filepath.Glob 不识别 **）。
+func globMatches(pattern string) ([]string, error) {
+	if !strings.Contains(pattern, "**") {
+		return filepath.Glob(pattern)
+	}
+	re, err := globToRegexp(pattern)
+	if err != nil {
+		return nil, err
+	}
+	base := "."
+	if filepath.IsAbs(pattern) {
+		// 从最靠前的静态前缀目录开始遍历，减少扫描范围
+		base = string(filepath.Separator)
+	}
+	var out []string
+	maxMatches := 2000
+	_ = filepath.WalkDir(base, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		if d.IsDir() && (d.Name() == ".git" || d.Name() == "node_modules" || d.Name() == "vendor") && p != base {
+			return fs.SkipDir
+		}
+		if d.IsDir() {
+			return nil
+		}
+		if re.MatchString(p) {
+			out = append(out, p)
+			if len(out) >= maxMatches {
+				return fs.SkipAll
+			}
+		}
+		return nil
+	})
+	return out, nil
+}
+
+// globToRegexp 把支持 ** 的 glob 转成正则：** 跨目录，* 不跨目录，? 单字符。
+func globToRegexp(pattern string) (*regexp.Regexp, error) {
+	var sb strings.Builder
+	sb.WriteString("^")
+	for i := 0; i < len(pattern); i++ {
+		c := pattern[i]
+		switch {
+		case c == '*':
+			if i+1 < len(pattern) && pattern[i+1] == '*' {
+				sb.WriteString(".*")
+				i++
+			} else {
+				sb.WriteString("[^/]*")
+			}
+		case c == '?':
+			sb.WriteString("[^/]")
+		default:
+			sb.WriteString(regexp.QuoteMeta(string(c)))
+		}
+	}
+	sb.WriteString("$")
+	return regexp.Compile(sb.String())
 }

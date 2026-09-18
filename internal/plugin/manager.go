@@ -117,10 +117,11 @@ func (m *Manager) scan(dir string) {
 		m.mu.Unlock()
 		log.Printf("[plugin] 已加载: %s", name)
 	}
-	// 卸载已删除的
+	// 卸载已删除的（仅限当前扫描目录内的插件；多目录时不能因为
+	// 目录 A 的事件把目录 B 的插件误卸载）。
 	m.mu.Lock()
 	for name, p := range m.plugins {
-		if !seen[name] {
+		if filepath.Dir(p.path) == dir && !seen[name] {
 			delete(m.plugins, name)
 			go p.Close(context.Background())
 			log.Printf("[plugin] 已卸载: %s", name)

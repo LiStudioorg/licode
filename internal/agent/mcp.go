@@ -237,27 +237,32 @@ func readMessage(r *bufio.Reader) ([]byte, error) {
 		return bytes.TrimSpace(line), nil
 	}
 	// Content-Length 帧
-	var header strings.Builder
+	var contentLength = -1
 	for {
 		line, err := r.ReadString('\n')
 		if err != nil {
 			return nil, err
 		}
-		header.WriteString(line)
-		if line == "\r\n" || line == "\n" {
+		line = strings.TrimRight(line, "\r\n")
+		if line == "" {
 			break
 		}
+		if i := strings.Index(line, ":"); i >= 0 {
+			key := strings.TrimSpace(line[:i])
+			if strings.EqualFold(key, "Content-Length") {
+				if n, aerr := strconv.Atoi(strings.TrimSpace(line[i+1:])); aerr == nil {
+					contentLength = n
+				}
+			}
+		}
 	}
-	h := header.String()
-	idx := strings.Index(h, "Content-Length:")
-	if idx < 0 {
+	if contentLength < 0 {
 		return nil, fmt.Errorf("缺少 Content-Length")
 	}
-	n, err := strconv.Atoi(strings.TrimSpace(h[idx+len("Content-Length:"):]))
-	if err != nil || n <= 0 || n > 8<<20 {
-		return nil, fmt.Errorf("无效 Content-Length: %w", err)
+	if contentLength <= 0 || contentLength > 8<<20 {
+		return nil, fmt.Errorf("无效 Content-Length: %d", contentLength)
 	}
-	body := make([]byte, n)
+	body := make([]byte, contentLength)
 	if _, err := io.ReadFull(r, body); err != nil {
 		return nil, err
 	}
@@ -346,6 +351,7 @@ type httpConn struct {
 	server  MCPServer
 	baseURL string
 	client  *http.Client
+	mu      sync.Mutex
 	nextID  int
 }
 
@@ -371,8 +377,10 @@ func newHTTPConn(s MCPServer) (*httpConn, error) {
 }
 
 func (c *httpConn) call(ctx context.Context, method string, params any) (json.RawMessage, error) {
+	c.mu.Lock()
 	c.nextID++
 	id := c.nextID
+	c.mu.Unlock()
 	req := jsonrpcMsg{JSONRPC: "2.0", Method: method, ID: &id}
 	if params != nil {
 		b, _ := json.Marshal(params)
@@ -418,6 +426,10 @@ func extractRPC(body []byte, wantID int) (*jsonrpcMsg, error) {
 		var m jsonrpcMsg
 		if err := json.Unmarshal(trim, &m); err != nil {
 			return nil, fmt.Errorf("invalid json: %w", err)
+		}
+		// 通知类消息可能无 id；带 id 的必须匹配，防止拿到服务器主动推送。
+		if m.ID != nil && *m.ID != wantID {
+			return nil, fmt.Errorf("response id mismatch: got %d want %d", *m.ID, wantID)
 		}
 		return &m, nil
 	}
