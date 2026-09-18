@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -66,7 +65,9 @@ var shellCandidates = []string{
 // shell 不在 /bin，必须按名称查 PATH）。
 var shellNames = []string{"sh", "bash", "dash", "zsh", "fish", "ksh", "pwsh", "powershell"}
 
-// handleShells 探测本机可用 shell：绝对路径 + PATH 名称 + $SHELL + Termux $PREFIX/bin。
+// handleShells 探测本机可用 shell：绝对路径 + PATH 扫描 + $SHELL + Termux $PREFIX/bin。
+// 注意：不能用 exec.LookPath —— Android seccomp 会拦截 faccessat2，触发 SIGSYS
+// 直接杀掉进程（Termux 上打开设置页即崩溃），因此这里只用 os.Stat 检查。
 func handleShells(w http.ResponseWriter, r *http.Request) {
 	seen := map[string]bool{}
 	add := func(p string) {
@@ -85,9 +86,9 @@ func handleShells(w http.ResponseWriter, r *http.Request) {
 	for _, c := range shellCandidates {
 		add(c)
 	}
-	for _, n := range shellNames {
-		if p, err := exec.LookPath(n); err == nil {
-			add(p)
+	for _, dir := range filepath.SplitList(os.Getenv("PATH")) {
+		for _, n := range shellNames {
+			add(filepath.Join(dir, n))
 		}
 	}
 	add(os.Getenv("SHELL"))
