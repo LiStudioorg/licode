@@ -33,6 +33,5 @@ onMounted(async () => {
       <ChatArea />
     </main>
     <RightPanel />
-    <SettingsDialog />
   </div>
 </template>

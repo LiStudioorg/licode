@@ -1,7 +1,6 @@
-// Package websocket implements the connection hub used by both the web UI
-// and the remote TUI. Each connected client owns an agent + session on the
-// server; user messages trigger agent runs whose events are streamed back
-// over the socket.
+// Package websocket implements the connection hub used by the web UI.
+// Each connected client owns an agent + session on the server; user messages
+// trigger agent runs whose events are streamed back over the socket.
 package websocket
 
 import (

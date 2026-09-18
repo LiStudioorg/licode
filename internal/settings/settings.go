@@ -1,10 +1,9 @@
-// Package settings 提供运行时可变的应用设置。不再使用任何配置文件，
-// 设置可在 TUI / Web / 远程连接界面中实时修改，并立即生效。
+// Package settings 提供运行时可变的应用设置。设置可在 Web 界面中实时修改，
+// 并立即生效。
 package settings
 
 import (
-	"context"
-	"encoding/json"
+	"errors"
 	"net/url"
 	"runtime"
 	"strings"
@@ -13,7 +12,11 @@ import (
 	"licode/internal/agent"
 	"licode/internal/ai"
 	"licode/internal/dnsclient"
-	"licode/internal/plugin"
+)
+
+var (
+	errToolNameRequired = errors.New("工具名不能为空")
+	errToolRuleInvalid  = errors.New("规则取值无效（应为 允许/询问/禁止）")
 )
 
 // ProviderChoices 是可选厂商。
@@ -229,7 +232,7 @@ func (s *Settings) AIConfig() ai.Config {
 	if ip := strings.TrimSpace(pc.HostIP); ip != "" {
 		cfg.HostIP = ip
 		// 把厂商域名 → 指定 IP 注入 DNS 静态映射（拷贝一份避免改共享配置）。
-		d := dnsclient.Config{Servers: s.DNS.Servers, Concurrency: s.DNS.Concurrency, TimeoutMS: s.DNS.TimeoutMS}
+		d := dnsclient.Config{Mode: s.DNS.Mode, Servers: s.DNS.Servers, Concurrency: s.DNS.Concurrency, TimeoutMS: s.DNS.TimeoutMS}
 		if s.DNS.HostOverrides != nil {
 			d.HostOverrides = make(map[string]string, len(s.DNS.HostOverrides)+1)
 			for k, v := range s.DNS.HostOverrides {
@@ -335,23 +338,6 @@ func (s *Settings) BuildAgent(client ai.LLMClient) *agent.Agent {
 	if mgr, err := agent.RegisterMCPServers(ag.Tools, s.MCPServers); err == nil && mgr != nil {
 		ag.SetMCPManager(mgr)
 	}
-	// WASM 插件（wazero 沙箱，运行时热加载）
-	for _, p := range plugin.Default.Plugins() {
-		pp := p
-		schema := pp.Schema
-		if len(schema) == 0 {
-			schema = map[string]any{"type": "object"}
-		}
-		_ = ag.Tools.Register(agent.Tool{
-			Name:        "plugin_" + pp.Name,
-			Description: "WASM 插件 " + pp.Name + "：" + pp.Description,
-			Schema:      schema,
-			Run: func(ctx context.Context, args map[string]any) (string, error) {
-				b, _ := json.Marshal(args)
-				return pp.Call(ctx, string(b))
-			},
-		})
-	}
 	return ag
 }
 
@@ -394,7 +380,7 @@ func (s *Settings) Snapshot() Settings {
 	if s.DNS != nil {
 		servers := make([]dnsclient.Server, len(s.DNS.Servers))
 		copy(servers, s.DNS.Servers)
-		d := &dnsclient.Config{Servers: servers, Concurrency: s.DNS.Concurrency, TimeoutMS: s.DNS.TimeoutMS}
+		d := &dnsclient.Config{Mode: s.DNS.Mode, Servers: servers, Concurrency: s.DNS.Concurrency, TimeoutMS: s.DNS.TimeoutMS}
 		if s.DNS.HostOverrides != nil {
 			d.HostOverrides = make(map[string]string, len(s.DNS.HostOverrides))
 			for k, v := range s.DNS.HostOverrides {
@@ -427,6 +413,74 @@ func copyProviders(in []ProviderConfig) []ProviderConfig {
 		out[i] = p
 		if len(p.Models) > 0 {
 			out[i].Models = append([]string{}, p.Models...)
+		}
+	}
+	return out
+}
+
+// EffectiveToolRule 返回工具在当前设置下的最终权限（allow/ask/deny），
+// 与 BuildAgent 的装配逻辑保持一致，供工具管理界面展示。
+func (s *Settings) EffectiveToolRule(tool string) string {
+	rule := "ask" // 未知工具（MCP/外部命令/技能）默认 ask
+	for _, t := range safeToolDefaults {
+		if t == tool {
+			rule = "allow"
+			break
+		}
+	}
+	for _, t := range riskyToolDefaults {
+		if t == tool {
+			rule = "ask"
+			break
+		}
+	}
+	if m, ok := s.ToolRules[tool]; ok && (m == "allow" || m == "ask" || m == "deny") {
+		rule = m
+	}
+	for _, t := range s.DenyTools {
+		if t == tool {
+			rule = "deny"
+		}
+	}
+	for _, t := range s.AskTools {
+		if t == tool {
+			rule = "ask"
+		}
+	}
+	return rule
+}
+
+// SetToolRule 设置某工具的权限规则，并清理互斥的旧式列表条目。
+func (s *Settings) SetToolRule(tool, rule string) error {
+	if tool == "" {
+		return errToolNameRequired
+	}
+	switch rule {
+	case "allow", "ask", "deny":
+	default:
+		return errToolRuleInvalid
+	}
+	if s.ToolRules == nil {
+		s.ToolRules = map[string]string{}
+	}
+	s.ToolRules[tool] = rule
+	// 旧的 ask_tools/deny_tools 与新规则冲突时以新规则为准
+	s.DenyTools = removeString(s.DenyTools, tool)
+	if rule == "deny" {
+		s.AskTools = removeString(s.AskTools, tool)
+	} else if rule == "ask" {
+		s.DenyTools = removeString(s.DenyTools, tool)
+	} else {
+		s.AskTools = removeString(s.AskTools, tool)
+	}
+	return nil
+}
+
+func removeString(list []string, v string) []string {
+	out := list[:0]
+	for _, x := range list {
+		if x != v {
+			out = append(out, x)
 		}
 	}
 	return out

@@ -71,6 +71,7 @@ export interface Settings {
 }
 
 export interface DNSConfig {
+  mode?: 'system' | 'custom' | 'command'
   servers?: DNSServer[]
   concurrency?: number
   timeout_ms?: number

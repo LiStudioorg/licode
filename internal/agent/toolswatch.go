@@ -163,6 +163,34 @@ func readCommandToolDef(path string) (*CommandToolDef, error) {
 	return &def, nil
 }
 
+// ExternalToolInfo 描述一个外部命令工具定义（供管理界面展示）。
+type ExternalToolInfo struct {
+	Name        string
+	Description string
+	File        string
+}
+
+// ListExternalTools 扫描目录下的外部命令工具定义，返回可展示的元数据。
+func ListExternalTools(dir string) []ExternalToolInfo {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil
+	}
+	var out []ExternalToolInfo
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
+			continue
+		}
+		path := filepath.Join(dir, e.Name())
+		def, err := readCommandToolDef(path)
+		if err != nil || def.Name == "" {
+			continue
+		}
+		out = append(out, ExternalToolInfo{Name: def.Name, Description: def.Description, File: path})
+	}
+	return out
+}
+
 // toolFromCommand 把一个外部命令工具定义转为可被 LLM 调用的 Tool。
 func toolFromCommand(def *CommandToolDef) Tool {
 	name := def.Name

@@ -56,6 +56,11 @@ func NewMCPManager() *MCPManager {
 // Register 连接所有 MCP 服务器并将其工具注册到 registry。
 // 工具名格式：mcp__<服务器名>__<工具名>。
 func (m *MCPManager) Register(registry *Registry, servers []MCPServer) error {
+	return m.RegisterContext(context.Background(), registry, servers)
+}
+
+// RegisterContext 同 Register，但所有连接/握手/工具枚举受 ctx 超时约束。
+func (m *MCPManager) RegisterContext(ctx context.Context, registry *Registry, servers []MCPServer) error {
 	for _, s := range servers {
 		if s.IsHTTP() {
 			if strings.TrimSpace(s.URL) == "" {
@@ -67,7 +72,7 @@ func (m *MCPManager) Register(registry *Registry, servers []MCPServer) error {
 				return fmt.Errorf("mcp %s: %w", s.Name, err)
 			}
 			m.add(conn)
-			if err := registerTools(registry, s, conn); err != nil {
+			if err := registerTools(ctx, registry, s, conn); err != nil {
 				m.Close()
 				return err
 			}
@@ -76,13 +81,13 @@ func (m *MCPManager) Register(registry *Registry, servers []MCPServer) error {
 		if strings.TrimSpace(s.Command) == "" {
 			continue
 		}
-		conn, err := newStdioConn(s)
+		conn, err := newStdioConn(ctx, s)
 		if err != nil {
 			m.Close()
 			return fmt.Errorf("mcp %s: %w", s.Name, err)
 		}
 		m.add(conn)
-		if err := registerTools(registry, s, conn); err != nil {
+		if err := registerTools(ctx, registry, s, conn); err != nil {
 			m.Close()
 			return err
 		}
@@ -148,7 +153,7 @@ type stdioConn struct {
 	closeCh chan struct{}
 }
 
-func newStdioConn(s MCPServer) (*stdioConn, error) {
+func newStdioConn(ctx context.Context, s MCPServer) (*stdioConn, error) {
 	cmd := exec.Command(s.Command, s.Args...)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
@@ -170,15 +175,15 @@ func newStdioConn(s MCPServer) (*stdioConn, error) {
 		closeCh: make(chan struct{}),
 	}
 	go c.readLoop()
-	if err := c.init(); err != nil {
+	if err := c.init(ctx); err != nil {
 		c.close()
 		return nil, err
 	}
 	return c, nil
 }
 
-func (c *stdioConn) init() error {
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+func (c *stdioConn) init(parent context.Context) error {
+	ctx, cancel := context.WithTimeout(parent, 15*time.Second)
 	defer cancel()
 	if _, err := c.call(ctx, "initialize", map[string]any{
 		"protocolVersion": "2024-11-05",
@@ -461,10 +466,10 @@ func extractRPC(body []byte, wantID int) (*jsonrpcMsg, error) {
 
 // ---- 工具注册 ----
 
-func registerTools(r *Registry, s MCPServer, client mcpConn) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+func registerTools(ctx context.Context, r *Registry, s MCPServer, client mcpConn) error {
+	callCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	res, err := client.call(ctx, "tools/list", map[string]any{})
+	res, err := client.call(callCtx, "tools/list", map[string]any{})
 	if err != nil {
 		return err
 	}

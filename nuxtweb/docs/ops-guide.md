@@ -109,7 +109,7 @@ git diff --name-status f3748a2 HEAD
 
 1. **WS 协议变了没有？** grep `internal/websocket/websocket.go` 的 `Type*` / `Evt*` 常量、`ClientMessage` / `ServerEvent` 的 json tag。变了 → 改 `nuxtweb/composables/useLicode.ts` 的 `send()`/`handleEvent()`。
 2. **REST 变了没有？** 新增/删除 `mux.HandleFunc`；变了字段。前端 REST 调用在 `composables/useApi.ts` + 各 Panel 组件；`/api/**` 代理是通配的，**新增端点无需改代理配置**。
-3. **设置对象加了字段？** `internal/settings/settings.go` 的 `Settings` struct → 在 `SettingsDialog.vue` 补对应表单；同时保证 `settings_set` 仍是全量回传。
+3. **设置对象加了字段？** `internal/settings/settings.go` 的 `Settings` struct → 在 `设置页（pages/settings.vue）.vue` 补对应表单；同时保证 `settings_set` 仍是全量回传。
 4. **新功能（新模块/新 API 组）？** 参考官方旧 UI（`internal/web/static/app.js` + `templates/`）的实现方式，在 nuxtweb 里新增组件/页面，并在 `RightPanel.vue` 或 `TopBar.vue` 挂入口。
 5. **仅是内部实现/README/文档改动？** 前端无需改动。
 
@@ -135,7 +135,7 @@ git diff --name-status f3748a2 HEAD
 
 ### 5.3 设置对象新增字段
 
-`components/SettingsDialog.vue`：
+`pages/settings.vue`：
 - 在对应 tab（基础/厂商/高级）加表单控件，`v-model`/`:model-value` 绑定 `local.xxx`。
 - **数字**字段记得在 `buildSettings()` 的 `NUM_KEYS` 里加并 `Number(...)` 转换；**逗号列表**（数组）用 `splitList`；**JSON**（如 mcp）用文本域 parse。
 - 永远**全量回传**：`save()` 用 `JSON.parse(JSON.stringify(state.settings))` 起步再覆盖字段，切勿只发局部。

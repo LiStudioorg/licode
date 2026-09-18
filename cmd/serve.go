@@ -23,7 +23,6 @@ import (
 
 	"licode/internal/agent"
 	"licode/internal/ai"
-	"licode/internal/plugin"
 	"licode/internal/rag"
 	"licode/internal/session"
 	"licode/internal/settings"
@@ -171,12 +170,6 @@ func runServe(opts *ServeOptions) error {
 		defer toolClose()
 		log.Printf("外部工具热加载已启动: %s", settings.ToolsDir())
 	}
-
-	// WASM 插件热加载
-	plugin.Default.SetDirs(plugin.Dirs()...)
-	pluginCtx, pluginCancel := context.WithCancel(context.Background())
-	defer pluginCancel()
-	plugin.Default.Start(pluginCtx)
 
 	st := &serverState{}
 	st.settings = settings.Defaults()
@@ -444,6 +437,37 @@ func runServe(opts *ServeOptions) error {
 		}
 		handleWorkspace(w, r, wsState)
 	})
+	// 工具管理（独立「工具」页面）：列表 / 权限设置 / 删除文件型工具与 MCP 配置
+	mux.HandleFunc("/api/tools", func(w http.ResponseWriter, r *http.Request) {
+		if !auth.require(w, r) {
+			return
+		}
+		if r.Method != http.MethodGet {
+			writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "仅支持 GET"})
+			return
+		}
+		st.handleToolsList(w, r)
+	})
+	mux.HandleFunc("/api/tools/rule", func(w http.ResponseWriter, r *http.Request) {
+		if !auth.require(w, r) {
+			return
+		}
+		if r.Method != http.MethodPost {
+			writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "仅支持 POST"})
+			return
+		}
+		st.handleToolsSetRule(w, r)
+	})
+	mux.HandleFunc("/api/tools/delete", func(w http.ResponseWriter, r *http.Request) {
+		if !auth.require(w, r) {
+			return
+		}
+		if r.Method != http.MethodPost {
+			writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "仅支持 POST"})
+			return
+		}
+		st.handleToolsDelete(w, r)
+	})
 	mux.HandleFunc("/api/version", func(w http.ResponseWriter, r *http.Request) {
 		if !auth.require(w, r) {
 			return
@@ -518,6 +542,15 @@ func runServe(opts *ServeOptions) error {
 			f.Close()
 			serveNuxtFile(w, r, nuxt, p)
 			return
+		}
+		// 子路由（/settings、/tools）优先命中预渲染的 <path>/index.html
+		if !strings.HasSuffix(p, ".html") {
+			nested := strings.TrimSuffix(p, "/") + "/index.html"
+			if f, err := nuxt.Open(nested); err == nil {
+				f.Close()
+				serveNuxtFile(w, r, nuxt, nested)
+				return
+			}
 		}
 		serveNuxtFile(w, r, nuxt, "index.html")
 	}))
@@ -597,8 +630,7 @@ func runServe(opts *ServeOptions) error {
 		defer cancel()
 		// 等待当前 HTTP/WebSocket 请求（含正在运行的 DAG 子代理与 Shell 脚本）自然完成或超时
 		_ = srv.Shutdown(ctx)
-		// 关闭 WASM 插件与 MCP 子进程，避免资源泄漏/数据损坏
-		plugin.Default.CloseAll()
+		// 关闭 MCP 子进程，避免资源泄漏/数据损坏
 		agent.CloseMCPClients()
 		log.Printf("已停止")
 	}()
@@ -770,10 +802,21 @@ func autoTitle(content string) string {
 
 // serveNuxtFile 以正确的 Content-Type 与缓存策略提供 Nuxt 静态产物文件。
 // .html 不缓存（改版即时生效）；/_nuxt/ 资源名带内容哈希，可长缓存。
+// 目录路径（/settings、/tools）会解析到其 index.html，避免被当成文件服务而 301。
 func serveNuxtFile(w http.ResponseWriter, r *http.Request, nuxt fs.FS, name string) {
-	if _, err := fs.Stat(nuxt, name); err != nil {
+	info, err := fs.Stat(nuxt, name)
+	if err != nil {
 		http.NotFound(w, r)
 		return
+	}
+	if info.IsDir() {
+		idx := strings.TrimSuffix(name, "/") + "/index.html"
+		fi, ierr := fs.Stat(nuxt, idx)
+		if ierr != nil || fi.IsDir() {
+			http.NotFound(w, r)
+			return
+		}
+		name = idx
 	}
 	if strings.HasSuffix(name, ".html") {
 		w.Header().Set("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")

@@ -1,6 +1,6 @@
 // Package agent implements the main coding agent: a tool-calling loop that
-// streams events to any UI (TUI, WebSocket, web page). It also provides a
-// lightweight sub-agent system with DAG dependency scheduling.
+// streams events to a WebSocket UI. It also provides a lightweight sub-agent
+// system with DAG dependency scheduling.
 package agent
 
 import (

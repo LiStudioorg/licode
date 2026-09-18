@@ -124,3 +124,66 @@ body {
 *::-webkit-scrollbar-track {
   background: transparent;
 }
+
+/* ===== 液态玻璃皮肤（html.glass）===== */
+html.glass body {
+  background:
+    radial-gradient(1200px 800px at 10% -10%, rgba(129, 140, 248, 0.35), transparent 60%),
+    radial-gradient(1000px 700px at 110% 10%, rgba(244, 114, 182, 0.28), transparent 55%),
+    radial-gradient(900px 700px at 50% 120%, rgba(56, 189, 248, 0.30), transparent 60%),
+    linear-gradient(135deg, #eef2ff 0%, #faf5ff 45%, #ecfeff 100%);
+  background-attachment: fixed;
+}
+html.glass.dark body {
+  background:
+    radial-gradient(1200px 800px at 10% -10%, rgba(79, 70, 229, 0.35), transparent 60%),
+    radial-gradient(1000px 700px at 110% 10%, rgba(219, 39, 119, 0.22), transparent 55%),
+    radial-gradient(900px 700px at 50% 120%, rgba(14, 165, 233, 0.25), transparent 60%),
+    linear-gradient(135deg, #09090b 0%, #17123a 50%, #082f49 100%);
+  background-attachment: fixed;
+}
+
+/* 半透明面板 + 背景模糊（覆盖 Tailwind 的不透明背景色） */
+html.glass .bg-white {
+  background-color: rgba(255, 255, 255, 0.55) !important;
+  backdrop-filter: blur(18px) saturate(1.5);
+  -webkit-backdrop-filter: blur(18px) saturate(1.5);
+}
+html.glass.dark .dark\:bg-zinc-900 {
+  background-color: rgba(24, 24, 27, 0.55) !important;
+  backdrop-filter: blur(18px) saturate(1.4);
+  -webkit-backdrop-filter: blur(18px) saturate(1.4);
+}
+html.glass.dark .dark\:bg-zinc-950 {
+  background-color: rgba(9, 9, 11, 0.45) !important;
+  backdrop-filter: blur(18px) saturate(1.4);
+  -webkit-backdrop-filter: blur(18px) saturate(1.4);
+}
+html.glass .bg-zinc-50 {
+  background-color: rgba(250, 250, 250, 0.45) !important;
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+}
+html.glass .bg-zinc-100 {
+  background-color: rgba(244, 244, 245, 0.6) !important;
+}
+html.glass.dark .dark\:bg-zinc-800,
+html.glass.dark .dark\:bg-zinc-800\/60 {
+  background-color: rgba(39, 39, 42, 0.6) !important;
+}
+
+/* 玻璃卡片/弹层：更明显的圆角与高光 */
+html.glass .rounded-xl,
+html.glass .rounded-2xl {
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.5), 0 8px 24px rgba(15, 23, 42, 0.08);
+}
+html.glass.dark .rounded-xl,
+html.glass.dark .rounded-2xl {
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08), 0 8px 24px rgba(0, 0, 0, 0.35);
+}
+html.glass .border-zinc-200 {
+  border-color: rgba(255, 255, 255, 0.55) !important;
+}
+html.glass.dark .dark\:border-zinc-800 {
+  border-color: rgba(255, 255, 255, 0.12) !important;
+}

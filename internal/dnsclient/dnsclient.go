@@ -11,6 +11,8 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"os/exec"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -32,11 +34,17 @@ type Server struct {
 	Server string `json:"server"`
 }
 
-// Config 描述自定义 DNS 配置。Servers 为空时并发查询全部预设（不使用系统 DNS）。
-// 并发查询数由 Concurrency 控制（0 = 默认 2，即主备同时查取最快）。
+// Config 描述自定义 DNS 配置。
+// Mode 支持三种取值：
+//   - "system"：使用系统 DNS 解析（net.DefaultResolver）
+//   - "custom"：仅用 Servers 列表解析（并发竞速）
+//   - "command"：通过系统命令（getent/ping/nslookup）获取 IP
+//
+// 空 Mode 为兼容旧配置的自动逻辑：有 Servers 视为 custom，否则并发查询内置预设。
 // HostOverrides 是域名 → 指定 IP 的静态映射（如被 DNS 劫持的 API 域名），
 // 命中后跳过 DNS 查询直接返回该 IP（TLS 的 SNI/证书校验仍用原域名）。
 type Config struct {
+	Mode          string            `json:"mode,omitempty"`
 	Servers       []Server          `json:"servers"`
 	Concurrency   int               `json:"concurrency,omitempty"` // 并发查询服务器数（0=默认 2，-1=全部）
 	TimeoutMS     int               `json:"timeout_ms,omitempty"`  // 单次查询超时毫秒（0=默认 5000）
@@ -343,8 +351,9 @@ func (srv Server) lookup(ctx context.Context, host string, qtype uint16) ([]net.
 	}
 }
 
-// LookupIP 解析 host 的 IP 列表。按 Concurrency 取前 N 个服务器并发竞速，
-// 哪个先返回 IP 就用哪个。不使用系统 DNS；Servers 为空时并发查询全部内置预设。
+// LookupIP 解析 host 的 IP 列表。
+// 静态映射优先；随后按 Mode（system/custom/command）选择解析方式；
+// 旧配置（Mode 为空）保持原行为：有服务器用服务器，否则并发查询全部内置预设。
 func (c Config) LookupIP(ctx context.Context, host string) ([]net.IP, error) {
 	host = strings.TrimSuffix(host, ".")
 	// 静态映射优先：域名被劫持/污染时，用户可为该域名指定真实 IP。
@@ -355,6 +364,18 @@ func (c Config) LookupIP(ctx context.Context, host string) ([]net.IP, error) {
 		}
 		return []net.IP{ip}, nil
 	}
+	switch strings.ToLower(strings.TrimSpace(c.Mode)) {
+	case "system":
+		return systemLookup(ctx, host)
+	case "command":
+		return commandLookup(ctx, host)
+	case "custom":
+		servers := c.activeServers()
+		if len(servers) == 0 {
+			return nil, fmt.Errorf("DNS 解析 %s 失败: 自定义模式未配置服务器", host)
+		}
+		return c.lookupAll(ctx, host)
+	}
 	servers := c.activeServers()
 	if len(servers) == 0 {
 		// 未配置任何 DNS：并发查询所有预设（国内外 plain/DoT/DoH 全部），取最快成功结果。
@@ -362,6 +383,76 @@ func (c Config) LookupIP(ctx context.Context, host string) ([]net.IP, error) {
 		return cfg.lookupAll(ctx, host)
 	}
 	return c.lookupAll(ctx, host)
+}
+
+// systemLookup 使用系统 DNS 解析。
+func systemLookup(ctx context.Context, host string) ([]net.IP, error) {
+	ips, err := net.DefaultResolver.LookupIP(ctx, "ip", host)
+	if err != nil {
+		return nil, fmt.Errorf("DNS 解析 %s 失败（系统 DNS）: %w", host, err)
+	}
+	if len(ips) == 0 {
+		return nil, fmt.Errorf("DNS 解析 %s 失败（系统 DNS 无结果）", host)
+	}
+	return ips, nil
+}
+
+// hostNamePattern 限制可传给系统命令的主机名，防命令注入。
+var hostNamePattern = regexp.MustCompile(`^[a-zA-Z0-9._-]+$`)
+
+// commandLookup 通过系统命令获取 IP：getent → ping → nslookup，
+// 全部不可用时回退系统 DNS，保证可用性。
+func commandLookup(ctx context.Context, host string) ([]net.IP, error) {
+	if !hostNamePattern.MatchString(host) {
+		return nil, fmt.Errorf("DNS 解析失败: 非法主机名 %q", host)
+	}
+	if _, err := exec.LookPath("getent"); err == nil {
+		if out, err := exec.CommandContext(ctx, "getent", "ahosts", host).CombinedOutput(); err == nil {
+			if ips := parseIPsFromText(string(out)); len(ips) > 0 {
+				return ips, nil
+			}
+		}
+	}
+	if _, err := exec.LookPath("ping"); err == nil {
+		// Linux/Termux: ping -c 1 -W 2；macOS/BSD 的 -W 语义不同，失败则退回无 -W。
+		out, err := exec.CommandContext(ctx, "ping", "-c", "1", "-W", "2", host).CombinedOutput()
+		if err != nil {
+			out, _ = exec.CommandContext(ctx, "ping", "-c", "1", host).CombinedOutput()
+		}
+		if ips := parseIPsFromText(string(out)); len(ips) > 0 {
+			return ips, nil
+		}
+	}
+	if _, err := exec.LookPath("nslookup"); err == nil {
+		if out, err := exec.CommandContext(ctx, "nslookup", host).CombinedOutput(); err == nil {
+			if ips := parseIPsFromText(string(out)); len(ips) > 0 {
+				return ips, nil
+			}
+		}
+	}
+	return systemLookup(ctx, host)
+}
+
+// ipTextPattern 匹配文本中的 IPv4/IPv6 字面量。
+var ipTextPattern = regexp.MustCompile(`(?:[0-9]{1,3}\.){3}[0-9]{1,3}|[0-9a-fA-F]{0,4}(?::[0-9a-fA-F]{0,4}){2,7}`)
+
+// parseIPsFromText 从命令输出中提取合法 IP（去重、保序）。
+func parseIPsFromText(s string) []net.IP {
+	var out []net.IP
+	seen := map[string]bool{}
+	for _, m := range ipTextPattern.FindAllString(s, -1) {
+		ip := net.ParseIP(strings.Trim(m, "[]"))
+		if ip == nil {
+			continue
+		}
+		key := ip.String()
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		out = append(out, ip)
+	}
+	return out
 }
 
 // queryTimeout 返回单次查询超时。
@@ -448,9 +539,14 @@ func (c Config) activeServers() []Server {
 }
 
 // Resolver 返回一个可复用的拨号函数，供 http.Transport.DialContext 使用。
-// 未配置任何服务器时返回 nil（此时 LookupIP 也会报错；本包绝不使用系统 DNS）。
+// system 模式返回 nil（交给系统解析）；custom/command 模式返回自定义拨号；
+// 旧配置（Mode 为空）无服务器时也返回 nil。
 func (c Config) Resolver() func(ctx context.Context, network, address string) (net.Conn, error) {
-	if !c.isCustom() {
+	mode := strings.ToLower(strings.TrimSpace(c.Mode))
+	if mode == "system" {
+		return nil
+	}
+	if mode == "" && !c.isCustom() {
 		return nil
 	}
 	return func(ctx context.Context, network, address string) (net.Conn, error) {

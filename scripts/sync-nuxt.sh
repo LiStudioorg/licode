@@ -20,7 +20,8 @@ if [ ! -d "nuxtweb/node_modules" ]; then
 fi
 
 echo "==> nuxt generate ..."
-( cd nuxtweb && npm run generate )
+# Termux 等环境缺少 /usr/bin/env 时 .bin 脚本 shebang 会失效，直接以 node 调用 CLI。
+( cd nuxtweb && node node_modules/nuxt/bin/nuxt.mjs generate )
 
 echo "==> 同步 nuxtweb/dist -> internal/web/nuxt ..."
 rm -rf internal/web/nuxt

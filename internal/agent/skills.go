@@ -13,6 +13,7 @@ type Skill struct {
 	Name        string
 	Description string
 	Body        string
+	File        string // 来源文件路径（管理界面展示/删除用）
 }
 
 // SkillDirs 返回技能目录（项目内与用户级）。
@@ -40,11 +41,13 @@ func LoadSkills(dirs ...string) []Skill {
 			if e.IsDir() || !strings.HasSuffix(strings.ToLower(e.Name()), ".md") {
 				continue
 			}
-			data, err := os.ReadFile(filepath.Join(dir, e.Name()))
+			path := filepath.Join(dir, e.Name())
+			data, err := os.ReadFile(path)
 			if err != nil {
 				continue
 			}
 			if s, ok := ParseSkill(data); ok {
+				s.File = path
 				skills = append(skills, s)
 			}
 		}
