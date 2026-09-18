@@ -1,10 +1,10 @@
 <script setup lang="ts">
 import {
   X, Plus, Trash2, RefreshCw, CheckCircle2, Loader2, Settings as SettingsIcon,
-  ArrowLeft, SlidersHorizontal, Server, Wrench, Blocks, Palette, Sun, Moon, Info,
+  ArrowLeft, SlidersHorizontal, Server, Wrench, Blocks, Palette, Sun, Moon, ChevronRight,
 } from 'lucide-vue-next'
 import { Message, Button, Input, Switch, Chip, Select, Dialog } from 'fuxsto-design'
-import type { DNSConfig, ProviderConfig, Settings } from '~/composables/useLicode'
+import type { ProviderConfig, Settings } from '~/composables/useLicode'
 import { useTheme } from '~/composables/useTheme'
 
 const dnsModeOptions = [
@@ -21,16 +21,13 @@ const dnsProtocolOptions = [
 
 // DNS 预设：国内 + 国外，覆盖 plain / DoT / DoH 三种协议，点击一键添加。
 const dnsPresets: { name: string; region: '国内' | '国外'; mode: string; server: string }[] = [
-  // 国内 - 阿里
   { name: '阿里 DoH', region: '国内', mode: 'doh', server: 'https://dns.alidns.com/dns-query' },
   { name: '阿里 UDP', region: '国内', mode: 'plain', server: '223.5.5.5:53' },
   { name: '阿里 UDP 2', region: '国内', mode: 'plain', server: '223.6.6.6:53' },
   { name: '阿里 DoT', region: '国内', mode: 'dot', server: '223.5.5.5:853' },
-  // 国内 - 腾讯
   { name: '腾讯 DoH', region: '国内', mode: 'doh', server: 'https://doh.pub/dns-query' },
   { name: '腾讯 UDP', region: '国内', mode: 'plain', server: '119.28.28.28:53' },
   { name: '腾讯 DoT', region: '国内', mode: 'dot', server: '119.29.29.29:853' },
-  // 国内 - 其他
   { name: 'OneDNS DoH', region: '国内', mode: 'doh', server: 'https://doh.onedns.net/dns-query' },
   { name: 'OneDNS DoT', region: '国内', mode: 'dot', server: '1.2.4.8:853' },
   { name: '360 UDP', region: '国内', mode: 'plain', server: '101.226.4.6:53' },
@@ -39,16 +36,13 @@ const dnsPresets: { name: string; region: '国内' | '国外'; mode: string; ser
   { name: '114 UDP 2', region: '国内', mode: 'plain', server: '114.114.115.115:53' },
   { name: '百度 DoH', region: '国内', mode: 'doh', server: 'https://doh.baidu.com/dns-query' },
   { name: 'CNNIC DoH', region: '国内', mode: 'doh', server: 'https://doh.cnnic.cn/dns-query' },
-  // 国外 - Cloudflare
   { name: 'CF DoH', region: '国外', mode: 'doh', server: 'https://1.1.1.1/dns-query' },
   { name: 'CF UDP', region: '国外', mode: 'plain', server: '1.0.0.1:53' },
   { name: 'CF DoT', region: '国外', mode: 'dot', server: '1.1.1.1:853' },
   { name: 'CF 安全 DoH', region: '国外', mode: 'doh', server: 'https://security.cloudflare-dns.com/dns-query' },
-  // 国外 - Google
   { name: 'Google DoH', region: '国外', mode: 'doh', server: 'https://dns.google/dns-query' },
   { name: 'Google DoT', region: '国外', mode: 'dot', server: '8.8.8.8:853' },
   { name: 'Google UDP', region: '国外', mode: 'plain', server: '8.8.4.4:53' },
-  // 国外 - 其他
   { name: 'Quad9 DoH', region: '国外', mode: 'doh', server: 'https://dns.quad9.net/dns-query' },
   { name: 'Quad9 DoT', region: '国外', mode: 'dot', server: '9.9.9.9:853' },
   { name: 'Quad9 UDP', region: '国外', mode: 'plain', server: '9.9.9.10:53' },
@@ -95,69 +89,36 @@ type ProviderRow = ProviderConfig & { _newModel?: string }
 
 const licode = useLicode()
 const { state } = licode
-const { mode: themeMode, skin, setSkin, setMode, initTheme } = useTheme()
+const {
+  mode: themeMode, skin, glassLevel, bgStyle, radius, anim,
+  setSkin, setMode, setGlassLevel, setBgStyle, setRadius, setAnim, initTheme,
+} = useTheme()
 
 const tab = ref<'basic' | 'providers' | 'advanced' | 'mcp' | 'appearance'>('basic')
 const local = ref<Settings>({})
-const toolRows = ref<{ tool: string; rule: string }[]>([])
 const mcpServers = ref<any[]>([])
 const fetching = ref('')
 const saving = ref(false)
-const shellOptions = ref<{ label: string; value: string }[]>([])
+const shells = ref<string[]>([])
 
 const navItems = [
   { id: 'basic', label: '基础', icon: SlidersHorizontal },
   { id: 'providers', label: 'AI 厂商', icon: Server },
   { id: 'advanced', label: '高级', icon: Wrench },
-  { id: 'mcp', label: 'MCP 工具', icon: Blocks },
+  { id: 'mcp', label: 'MCP 连接', icon: Blocks },
   { id: 'appearance', label: '外观', icon: Palette },
 ] as const
 
 async function loadShells() {
   try {
-    const shells = await useApi<string[]>('/api/shells')
-    shellOptions.value = (shells || []).map((s) => ({ label: s, value: s }))
+    shells.value = (await useApi<string[]>('/api/shells')) || []
   } catch {}
 }
 
-const mcpPresets: Record<string, any> = {
-  filesystem: { name: 'filesystem', type: 'stdio', command: 'npx', args: ['-y', '@modelcontextprotocol/server-filesystem', '/'] },
-  git: { name: 'git', type: 'stdio', command: 'npx', args: ['-y', '@modelcontextprotocol/server-git'] },
-  github: { name: 'github', type: 'stdio', command: 'npx', args: ['-y', '@modelcontextprotocol/server-github'] },
-  postgres: { name: 'postgres', type: 'stdio', command: 'npx', args: ['-y', '@modelcontextprotocol/server-postgres'] },
-  sqlite: { name: 'sqlite', type: 'stdio', command: 'npx', args: ['-y', '@modelcontextprotocol/server-sqlite'] },
-  memory: { name: 'memory', type: 'stdio', command: 'npx', args: ['-y', '@modelcontextprotocol/server-memory'] },
-  puppeteer: { name: 'puppeteer', type: 'stdio', command: 'npx', args: ['-y', '@modelcontextprotocol/server-puppeteer'] },
-  'brave-search': { name: 'brave-search', type: 'stdio', command: 'npx', args: ['-y', '@modelcontextprotocol/server-brave-search'] },
-  fetch: { name: 'fetch', type: 'stdio', command: 'npx', args: ['-y', '@modelcontextprotocol/server-fetch'] },
+// MCP 只支持网络服务（http/https）。
+function addMcpServer() {
+  mcpServers.value.push({ name: '', type: 'http', url: '' })
 }
-
-function isMcpAdded(name: string) {
-  return mcpServers.value.some((s) => s.name === name && s.type !== 'http')
-}
-
-function addMcpPreset(name: string) {
-  const p = mcpPresets[name]
-  if (p && !isMcpAdded(name)) {
-    mcpServers.value.push({ ...p })
-  }
-}
-
-function addMcpCustom(type: 'stdio' | 'http' = 'stdio') {
-  if (type === 'http') mcpServers.value.push({ name: 'custom-http', type: 'http', url: '' })
-  else mcpServers.value.push({ name: 'custom', type: 'stdio', command: '', args: [] })
-}
-
-const mcpTypeOptions = [
-  { label: '本地命令（stdio，如 python/uvx）', value: 'stdio' },
-  { label: '远程服务（http/https）', value: 'http' },
-]
-
-function addMcpTyped() {
-  addMcpCustom(String((newMcpType.value as any)) === 'http' ? 'http' : 'stdio')
-}
-
-const newMcpType = ref<'stdio' | 'http'>('stdio')
 
 const NUM_KEYS = [
   'temperature',
@@ -172,8 +133,6 @@ const NUM_KEYS = [
   'rag_top_files',
 ] as const
 
-const COMMA_KEYS = ['ask_tools', 'deny_tools'] as const
-
 const fieldLabels: Record<string, string> = {
   retry_max: '调用失败重试次数',
   sub_timeout: '子代理超时（秒）',
@@ -182,10 +141,7 @@ const fieldLabels: Record<string, string> = {
   tool_retry_max: '工具重试次数',
   shutdown_timeout: '关停等待时间（秒）',
   rag_source: 'RAG 索引目录（留空关闭）',
-  ask_tools: '询问类工具（逗号分隔）',
-  deny_tools: '禁止类工具（逗号分隔）',
   redact_secrets: '敏感信息脱敏',
-  sandbox: '沙箱执行（Docker）',
   tool_auto_retry: '工具自动重试',
   rag_enabled: '启用 RAG 项目检索',
 }
@@ -197,21 +153,54 @@ const typeOptions = [
   { label: 'Gemini', value: 'gemini' },
 ]
 
-const ruleOptions = [
-  { label: '允许', value: 'allow' },
-  { label: '询问', value: 'ask' },
-  { label: '禁止', value: 'deny' },
-]
+function emptyProvider(): ProviderRow {
+  return { provider: '', name: '', type: 'openai', base_url: '', api_key: '', model: '', models: [] }
+}
 
-const newProvider = ref<ProviderRow>({ provider: '', name: '', type: 'openai', base_url: '', api_key: '', model: '', models: [] })
+// 厂商：列表为小卡片，点击弹出大卡片（左接口设置 / 右模型管理）。
+const editOpen = ref(false)
+const editNew = ref(false)
+const editKey = ref('')
+const editP = ref<ProviderRow>(emptyProvider())
 
-// 厂商详细设置小弹窗：指定 IP / 忽略 SSL / 协议类型 / 获取模型等集中配置。
-const detailOpen = ref(false)
-const detailProvider = ref<ProviderRow | null>(null)
+function openProvider(p?: ProviderRow) {
+  editNew.value = !p
+  editKey.value = p?.provider || ''
+  editP.value = p ? JSON.parse(JSON.stringify(p)) : emptyProvider()
+  editOpen.value = true
+}
 
-function openDetail(p: ProviderRow) {
-  detailProvider.value = p
-  detailOpen.value = true
+function commitProvider() {
+  const p = editP.value
+  const id = (p.provider || p.name || p.type || 'custom').trim().toLowerCase().replace(/\s+/g, '-')
+  if (!id) {
+    Message.warning('请填写厂商名称')
+    return
+  }
+  const list = providers.value.slice()
+  if (editNew.value) {
+    if (list.some((x) => x.provider === id)) {
+      Message.error('厂商标识已存在')
+      return
+    }
+    p.provider = id
+    list.push(p)
+    Message.success('厂商已添加，点击保存生效')
+  } else {
+    const i = list.findIndex((x) => x.provider === editKey.value)
+    if (i < 0) return
+    p.provider = id
+    list[i] = p
+    if (local.value.provider === editKey.value) {
+      local.value.provider = id
+      local.value.base_url = p.base_url || ''
+      local.value.api_key = p.api_key || ''
+      if (p.model) local.value.model = p.model
+    }
+    Message.success('厂商已更新，点击保存生效')
+  }
+  local.value.providers = list
+  editOpen.value = false
 }
 
 // 用户自定义 CA证书管理（~/.licode/certs/）。
@@ -274,11 +263,9 @@ function resetLocal() {
   if (!local.value.dns) local.value.dns = {}
   if (!local.value.dns.servers) local.value.dns.servers = []
   if (!local.value.dns.mode) local.value.dns.mode = 'custom'
-  toolRows.value = Object.entries(local.value.tool_rules || {}).map(([tool, rule]) => ({
-    tool,
-    rule: String(rule),
-  }))
-  mcpServers.value = local.value.mcp_servers ? JSON.parse(JSON.stringify(local.value.mcp_servers)) : []
+  mcpServers.value = (local.value.mcp_servers || [])
+    .filter((s: any) => s && (s.type === 'http' || s.url))
+    .map((s: any) => ({ name: s.name || '', type: 'http', url: s.url || '' }))
 }
 
 onMounted(() => {
@@ -366,35 +353,6 @@ async function fetchModels(p: ProviderRow) {
   }
 }
 
-function addProvider() {
-  const np = newProvider.value
-  const id = (np.provider || np.name || np.type || 'custom')
-    .trim()
-    .toLowerCase()
-    .replace(/\s+/g, '-')
-  if (!id) {
-    Message.warning('请填写厂商标识或名称')
-    return
-  }
-  if (providers.value.some((p) => p.provider === id)) {
-    Message.error('厂商标识已存在')
-    return
-  }
-  local.value.providers = [
-    ...providers.value,
-    {
-      provider: id,
-      name: np.name || '',
-      type: np.type || 'openai',
-      base_url: np.base_url || '',
-      api_key: np.api_key || '',
-      model: np.model || '',
-    },
-  ]
-  newProvider.value = { provider: '', name: '', type: 'openai', base_url: '', api_key: '', model: '' }
-  Message.success('厂商已添加，点击保存生效')
-}
-
 function removeProvider(p: ProviderRow) {
   local.value.providers = providers.value.filter((x) => x.provider !== p.provider)
   if (local.value.provider === p.provider) {
@@ -404,29 +362,14 @@ function removeProvider(p: ProviderRow) {
   Message.success('厂商已移除，点击保存生效')
 }
 
-function splitList(v: unknown): string[] {
-  return String(v ?? '')
-    .split(/[,，]/)
-    .map((x) => x.trim())
-    .filter(Boolean)
-}
-
 function buildSettings(): Settings {
   const s = JSON.parse(JSON.stringify(local.value)) as Settings
   for (const k of NUM_KEYS) s[k] = Number(s[k]) || 0
   s.streaming = !!s.streaming
-  const rules: Record<string, string> = {}
-  for (const r of toolRows.value) {
-    if (r.tool.trim()) rules[r.tool.trim()] = r.rule || 'ask'
-  }
-  s.tool_rules = rules
-  for (const k of COMMA_KEYS) s[k] = splitList(s[k])
+  // 工具权限由「工具管理」页维护：完整保留原值，不做表单重建。
   s.mcp_servers = mcpServers.value
-    .filter((x) => x && (x.type === 'http' ? x.url?.trim() : x.command?.trim()))
-    .map((x) => {
-      if (x.type === 'http') return { name: x.name, type: 'http', url: x.url }
-      return { name: x.name, type: 'stdio', command: x.command, args: x.args || [] }
-    })
+    .filter((x) => x && (x.url || '').trim())
+    .map((x) => ({ name: (x.name || '').trim(), type: 'http', url: x.url.trim() }))
   const dns = s.dns
   if (dns) {
     const mode = dns.mode === 'system' || dns.mode === 'command' ? dns.mode : 'custom'
@@ -446,7 +389,7 @@ function buildSettings(): Settings {
       s.dns = { mode }
     }
   }
-  // _newModel 与 __models 都是临时字段，不随设置持久化
+  // _newModel 是临时字段，不随设置持久化
   s.providers = (s.providers || []).map((p) => {
     const { _newModel: _a, ...rest } = p as ProviderRow
     return rest
@@ -484,6 +427,23 @@ const themeOptions = [
   { label: '浅色', value: 'light' },
   { label: '深色', value: 'dark' },
 ]
+const skinOptions = [
+  { label: '默认', value: 'default' },
+  { label: '液态玻璃', value: 'glass' },
+]
+const glassOptions = [
+  { label: '轻柔', value: 'soft' },
+  { label: '标准', value: 'medium' },
+  { label: '浓厚', value: 'strong' },
+]
+const bgOptions = [
+  { label: '极光渐变', value: 'gradient' },
+  { label: '纯色', value: 'plain' },
+]
+const radiusOptions = [
+  { label: '默认', value: 'normal' },
+  { label: '大圆角', value: 'large' },
+]
 </script>
 
 <template>
@@ -510,6 +470,14 @@ const themeOptions = [
         >
           <component :is="item.icon" :size="15" />
           {{ item.label }}
+        </button>
+        <button
+          class="flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-sm text-zinc-600 transition-colors hover:bg-zinc-50 dark:text-zinc-400 dark:hover:bg-zinc-800/60"
+          @click="navigateTo('/tools')"
+        >
+          <Wrench :size="15" />
+          工具管理
+          <ChevronRight :size="14" class="ml-auto text-zinc-400" />
         </button>
       </nav>
       <div class="border-t border-zinc-200 p-3 dark:border-zinc-800">
@@ -676,30 +644,41 @@ const themeOptions = [
           </div>
         </template>
 
-        <!-- 厂商 -->
+        <!-- 厂商：小卡片列表 + 大卡片编辑 -->
         <template v-else-if="tab === 'providers'">
-          <h2 class="mb-4 text-lg font-semibold">AI 厂商</h2>
-          <div class="space-y-3">
-            <div
+          <div class="mb-4 flex items-center justify-between">
+            <h2 class="text-lg font-semibold">AI 厂商</h2>
+            <Button size="sm" variant="outline" :icon="Plus" @click="openProvider()">添加厂商</Button>
+          </div>
+          <div v-if="!providers.length" class="rounded-xl border border-dashed border-zinc-300 p-8 text-center text-sm text-zinc-400 dark:border-zinc-700">
+            还没有厂商配置，点击右上角「添加厂商」开始
+          </div>
+          <div class="grid gap-3 sm:grid-cols-2">
+            <button
               v-for="p in providers"
               :key="p.provider"
-              class="rounded-xl border p-3"
+              class="rounded-xl border p-3 text-left transition-colors hover:border-zinc-400 dark:hover:border-zinc-500"
               :class="
                 p.provider === local.provider
                   ? 'border-zinc-900 dark:border-zinc-100'
                   : 'border-zinc-200 dark:border-zinc-800'
               "
+              @click="openProvider(p)"
             >
-              <div class="mb-2 flex items-center gap-2">
+              <div class="flex items-center gap-2">
                 <CheckCircle2
                   v-if="p.provider === local.provider"
-                  :size="15"
-                  class="text-emerald-600 dark:text-emerald-400"
+                  :size="14"
+                  class="shrink-0 text-emerald-600 dark:text-emerald-400"
                 />
-                <span class="text-sm font-medium">{{ p.name || p.provider }}</span>
+                <span class="truncate text-sm font-medium">{{ p.name || p.provider }}</span>
                 <Chip size="sm" variant="outline">{{ p.type || 'openai' }}</Chip>
-                <span class="flex-1" />
-                <Button size="sm" variant="ghost" :icon="SettingsIcon" title="详细设置（指定 IP / 忽略 SSL 等）" @click="openDetail(p)" />
+              </div>
+              <div class="mt-1.5 truncate text-xs text-zinc-500">{{ p.base_url || '未设置 API 地址' }}</div>
+              <div class="mt-1 truncate text-[11px] text-zinc-400">
+                模型：{{ p.model || (p.models && p.models[0]) || '未选择' }}（共 {{ (p.models || []).length }} 个）
+              </div>
+              <div class="mt-2 flex items-center gap-1" @click.stop>
                 <Button
                   v-if="p.provider !== local.provider"
                   size="sm"
@@ -708,116 +687,126 @@ const themeOptions = [
                 >
                   激活
                 </Button>
-                <Button size="sm" variant="ghost" danger :icon="Trash2" @click="removeProvider(p)" />
+                <Chip v-else size="sm" variant="secondary">当前使用</Chip>
+                <span class="flex-1" />
+                <Button size="sm" variant="ghost" danger :icon="Trash2" title="删除" @click="removeProvider(p)" />
               </div>
-              <div class="grid grid-cols-2 gap-2">
-                <Input v-model="p.name" size="sm" placeholder="显示名称" />
-                <Input v-model="p.base_url" size="sm" placeholder="API 地址" />
-                <Input v-model="p.api_key" size="sm" type="password" placeholder="API 密钥" class="col-span-2" />
-                <div class="col-span-2 space-y-2 pt-1">
-                  <div class="text-xs text-zinc-500">模型</div>
-                  <div class="flex flex-wrap gap-1">
-                    <Chip
-                      v-for="m in p.models || []"
-                      :key="m"
-                      size="sm"
-                      variant="secondary"
-                      class="group cursor-default"
-                    >
-                      {{ m }}
-                      <button
-                        class="ml-1 text-zinc-400 group-hover:text-red-500"
-                        :title="`移除「${m}」`"
-                        @click="removeModel(p, m)"
-                      >
-                        <X :size="11" />
-                      </button>
-                    </Chip>
-                    <span v-if="!(p.models && p.models.length)" class="self-center text-xs text-zinc-400">暂未添加模型</span>
-                  </div>
-                  <div class="flex items-center gap-2">
-                    <Input
-                      v-model="p._newModel"
-                      size="sm"
-                      placeholder="模型名（回车或点「添加」，如 gpt-4o-mini）"
-                      class="flex-1"
-                      @keydown.enter.prevent="addModel(p)"
-                    />
-                    <Button size="sm" variant="outline" :icon="Plus" @click="addModel(p)">添加</Button>
-                  </div>
-                  <Select
-                    v-if="modelOpts(p).length"
-                    :model-value="p.model"
-                    size="sm"
-                    searchable
-                    :options="modelOpts(p)"
-                    placeholder="当前模型"
-                    @update:model-value="p.model = String($event)"
-                  />
-                  <Input v-else v-model="p.model" size="sm" placeholder="当前模型（如 gpt-4o-mini）" />
-                </div>
-              </div>
-            </div>
+            </button>
           </div>
 
-          <div class="mt-4 rounded-xl border border-dashed border-zinc-300 p-4 dark:border-zinc-700">
-            <div class="mb-2 text-sm font-medium text-zinc-600 dark:text-zinc-400">新增厂商</div>
-            <div class="grid grid-cols-2 gap-2">
-              <Input v-model="newProvider.name" size="sm" placeholder="名称（如 我的 Ollama）" />
-              <Select
-                :model-value="newProvider.type"
-                size="sm"
-                :options="typeOptions"
-                @update:model-value="newProvider.type = String($event)"
-              />
-              <Input v-model="newProvider.base_url" size="sm" placeholder="API 地址" />
-              <Input v-model="newProvider.api_key" size="sm" type="password" placeholder="API 密钥" />
-              <Input v-model="newProvider.model" size="sm" placeholder="模型名（可留空）" class="col-span-2" />
-            </div>
-            <Button size="sm" variant="secondary" class="mt-3 w-full" :icon="Plus" @click="addProvider">
-              添加厂商
-            </Button>
-          </div>
-
-          <!-- 厂商详细设置小弹窗 -->
+          <!-- 厂商编辑大卡片：左接口 / 右模型 -->
           <Teleport to="body">
             <div
-              v-if="detailOpen && detailProvider"
+              v-if="editOpen"
               class="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 p-4"
-              @click.self="detailOpen = false"
+              @click.self="editOpen = false"
             >
-              <div class="w-full max-w-md space-y-3 rounded-2xl border border-zinc-200 bg-white p-4 shadow-2xl dark:border-zinc-800 dark:bg-zinc-900">
-                <div class="flex items-center justify-between">
-                  <span class="text-sm font-semibold">详细设置 · {{ detailProvider.name || detailProvider.provider }}</span>
-                  <Button variant="ghost" size="sm" :icon="X" @click="detailOpen = false" />
+              <div class="flex max-h-[85vh] w-full max-w-3xl flex-col overflow-hidden rounded-2xl border border-zinc-200 bg-white shadow-2xl dark:border-zinc-800 dark:bg-zinc-900">
+                <div class="flex shrink-0 items-center justify-between border-b border-zinc-200 px-4 py-3 dark:border-zinc-800">
+                  <span class="text-sm font-semibold">{{ editNew ? '添加厂商' : '厂商设置' }} · {{ editP.name || editP.provider || '未命名' }}</span>
+                  <Button variant="ghost" size="sm" :icon="X" @click="editOpen = false" />
                 </div>
-                <label class="block space-y-1">
-                  <span class="text-xs text-zinc-500">协议类型</span>
-                  <Select
-                    :model-value="detailProvider.type || 'openai'"
-                    size="sm"
-                    :options="typeOptions"
-                    @update:model-value="detailProvider.type = String($event)"
-                  />
-                </label>
-                <label class="block space-y-1">
-                  <span class="text-xs text-zinc-500">指定 IP（可选，绕过 DNS 劫持/污染）</span>
-                  <Input v-model="detailProvider.host_ip" placeholder="如 104.18.7.10；SNI/证书校验仍用原域名" />
-                  <span class="block text-[10px] text-zinc-400">请求 API 域名时直接连此 IP，不再查询 DNS；TLS 证书按原域名正常校验</span>
-                </label>
-                <label class="flex items-center justify-between gap-2 rounded-lg border border-zinc-200 p-2.5 text-sm dark:border-zinc-700">
-                  <span>
-                    忽略 SSL 证书校验
-                    <span class="block text-[10px] text-zinc-400">仅自签名证书等受控场景使用；配合指定 IP 可访问内网/自建网关</span>
-                  </span>
-                  <Switch :model-value="!!detailProvider.insecure_ssl" size="sm" @update:model-value="detailProvider.insecure_ssl = !!$event" />
-                </label>
-                <div class="flex items-center gap-2">
-                  <Button size="sm" variant="outline" :icon="RefreshCw" :loading="fetching === detailProvider.provider" @click="fetchModels(detailProvider)">
-                    获取模型
-                  </Button>
-                  <span class="flex-1" />
-                  <Button size="sm" variant="primary" @click="detailOpen = false">完成</Button>
+                <div class="grid min-h-0 flex-1 gap-4 overflow-y-auto p-4 md:grid-cols-2">
+                  <!-- 左：接口设置 -->
+                  <div class="space-y-3">
+                    <div class="text-xs font-medium text-zinc-400">接口设置</div>
+                    <label class="block space-y-1">
+                      <span class="text-xs text-zinc-500">名称</span>
+                      <Input v-model="editP.name" size="sm" placeholder="如 我的 Ollama" />
+                    </label>
+                    <label class="block space-y-1">
+                      <span class="text-xs text-zinc-500">协议类型</span>
+                      <Select
+                        :model-value="editP.type || 'openai'"
+                        size="sm"
+                        :options="typeOptions"
+                        @update:model-value="editP.type = String($event)"
+                      />
+                    </label>
+                    <label class="block space-y-1">
+                      <span class="text-xs text-zinc-500">API 地址</span>
+                      <Input v-model="editP.base_url" size="sm" placeholder="https://api.openai.com/v1" />
+                    </label>
+                    <label class="block space-y-1">
+                      <span class="text-xs text-zinc-500">API 密钥</span>
+                      <Input v-model="editP.api_key" size="sm" type="password" placeholder="sk-..." />
+                    </label>
+                    <label class="block space-y-1">
+                      <span class="text-xs text-zinc-500">指定 IP（可选，绕过 DNS 污染）</span>
+                      <Input v-model="editP.host_ip" size="sm" placeholder="如 104.18.7.10" />
+                    </label>
+                    <label class="flex items-center justify-between gap-2 rounded-lg border border-zinc-200 p-2.5 text-sm dark:border-zinc-700">
+                      <span>
+                        忽略 SSL 证书校验
+                        <span class="block text-[10px] text-zinc-400">仅自签名等受控场景</span>
+                      </span>
+                      <Switch :model-value="!!editP.insecure_ssl" size="sm" @update:model-value="editP.insecure_ssl = !!$event" />
+                    </label>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      class="w-full"
+                      :icon="RefreshCw"
+                      :loading="fetching === editP.provider"
+                      @click="fetchModels(editP)"
+                    >
+                      从服务商获取模型列表
+                    </Button>
+                  </div>
+
+                  <!-- 右：模型管理 -->
+                  <div class="space-y-3">
+                    <div class="text-xs font-medium text-zinc-400">模型管理（可自定义增删）</div>
+                    <div class="flex min-h-24 flex-wrap content-start gap-1 rounded-lg border border-zinc-200 p-2 dark:border-zinc-700">
+                      <Chip
+                        v-for="m in editP.models || []"
+                        :key="m"
+                        size="sm"
+                        :variant="editP.model === m ? 'secondary' : 'outline'"
+                        class="group cursor-default"
+                      >
+                        {{ m }}
+                        <button
+                          class="ml-1 text-zinc-400 group-hover:text-red-500"
+                          :title="`移除「${m}」`"
+                          @click="removeModel(editP, m)"
+                        >
+                          <X :size="11" />
+                        </button>
+                      </Chip>
+                      <span v-if="!(editP.models && editP.models.length)" class="self-center px-1 text-xs text-zinc-400">
+                        暂无模型，先获取或手动添加
+                      </span>
+                    </div>
+                    <div class="flex items-center gap-2">
+                      <Input
+                        v-model="editP._newModel"
+                        size="sm"
+                        placeholder="模型名（如 gpt-4o-mini）"
+                        class="flex-1"
+                        @keydown.enter.prevent="addModel(editP)"
+                      />
+                      <Button size="sm" variant="outline" :icon="Plus" @click="addModel(editP)">添加</Button>
+                    </div>
+                    <label class="block space-y-1">
+                      <span class="text-xs text-zinc-500">当前使用模型</span>
+                      <Select
+                        v-if="modelOpts(editP).length"
+                        :model-value="editP.model"
+                        size="sm"
+                        searchable
+                        :options="modelOpts(editP)"
+                        placeholder="选择模型"
+                        @update:model-value="editP.model = String($event)"
+                      />
+                      <Input v-else v-model="editP.model" size="sm" placeholder="如 gpt-4o-mini" />
+                    </label>
+                    <p class="text-[10px] text-zinc-400">模型名会随设置保存；生成请求时使用「当前使用模型」。</p>
+                  </div>
+                </div>
+                <div class="flex shrink-0 items-center justify-end gap-2 border-t border-zinc-200 px-4 py-3 dark:border-zinc-800">
+                  <Button variant="ghost" @click="editOpen = false">取消</Button>
+                  <Button variant="primary" @click="commitProvider">保存厂商</Button>
                 </div>
               </div>
             </div>
@@ -828,21 +817,20 @@ const themeOptions = [
         <template v-else-if="tab === 'advanced'">
           <h2 class="mb-4 text-lg font-semibold">高级设置</h2>
           <div class="grid grid-cols-2 gap-3">
-            <label class="space-y-1">
-              <span class="text-xs text-zinc-500">Shell 路径（自动检测）</span>
-              <Select
-                :options="shellOptions"
-                :model-value="local.shell_path || ''"
-                size="sm"
-                searchable
-                clearable
-                placeholder="选择已检测到的 Shell"
-                @update:model-value="local.shell_path = String($event || '')"
-              />
-            </label>
-            <label class="space-y-1">
-              <span class="text-xs text-zinc-500">沙箱镜像</span>
-              <Input v-model="local.sandbox_image" placeholder="alpine" />
+            <label class="col-span-2 space-y-1">
+              <span class="text-xs text-zinc-500">Shell 路径</span>
+              <Input v-model="local.shell_path" size="sm" placeholder="如 /bin/sh 或 /data/data/com.termux/files/usr/bin/bash" />
+              <span v-if="shells.length" class="flex flex-wrap gap-1 pt-1">
+                <button
+                  v-for="s in shells"
+                  :key="s"
+                  class="rounded-md border border-zinc-200 px-1.5 py-0.5 font-mono text-[10px] text-zinc-500 hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-800"
+                  @click="local.shell_path = s"
+                >
+                  {{ s }}
+                </button>
+              </span>
+              <span v-else class="text-[10px] text-zinc-400">未检测到其他 shell，可直接手动填写路径</span>
             </label>
             <label v-for="k in ['retry_max', 'sub_timeout', 'max_ctx_tokens', 'cache_ttl', 'tool_retry_max', 'shutdown_timeout']" :key="k" class="space-y-1">
               <span class="text-xs text-zinc-500">{{ fieldLabels[k] || k }}</span>
@@ -852,24 +840,12 @@ const themeOptions = [
               <span class="text-xs text-zinc-500">{{ fieldLabels.rag_source }}</span>
               <Input v-model="local.rag_source" placeholder="留空关闭" />
             </label>
-            <label class="space-y-1">
-              <span class="text-xs text-zinc-500">{{ fieldLabels.ask_tools }}</span>
-              <Input :model-value="(local.ask_tools || []).join(',')" @update:model-value="local.ask_tools = splitList($event)" />
-            </label>
-            <label class="space-y-1">
-              <span class="text-xs text-zinc-500">{{ fieldLabels.deny_tools }}</span>
-              <Input :model-value="(local.deny_tools || []).join(',')" @update:model-value="local.deny_tools = splitList($event)" />
-            </label>
           </div>
 
           <div class="mt-4 grid grid-cols-2 gap-2 rounded-xl border border-zinc-200 p-4 dark:border-zinc-800">
             <label class="flex items-center justify-between gap-2 text-sm">
               <span>{{ fieldLabels.redact_secrets }}</span>
               <Switch :model-value="!!local.redact_secrets" size="sm" @update:model-value="local.redact_secrets = !!$event" />
-            </label>
-            <label class="flex items-center justify-between gap-2 text-sm">
-              <span>{{ fieldLabels.sandbox }}</span>
-              <Switch :model-value="!!local.sandbox" size="sm" @update:model-value="local.sandbox = !!$event" />
             </label>
             <label class="flex items-center justify-between gap-2 text-sm">
               <span>{{ fieldLabels.tool_auto_retry }}</span>
@@ -879,30 +855,6 @@ const themeOptions = [
               <span>{{ fieldLabels.rag_enabled }}</span>
               <Switch :model-value="!!local.rag_enabled" size="sm" @update:model-value="local.rag_enabled = !!$event" />
             </label>
-          </div>
-
-          <div class="mt-4 space-y-2">
-            <div class="flex items-center justify-between">
-              <span class="text-sm font-medium">工具权限规则</span>
-              <span class="flex items-center gap-1 text-[10px] text-zinc-400">
-                <Info :size="11" /> 更完整的工具管理请到「工具」页面
-                <Button size="sm" variant="ghost" @click="navigateTo('/tools')">打开工具页面</Button>
-              </span>
-            </div>
-            <div v-for="(r, i) in toolRows" :key="i" class="flex items-center gap-2">
-              <Input v-model="r.tool" size="sm" placeholder="工具名（如 Shell / mcp__git__git_status）" class="flex-1" />
-              <Select
-                :model-value="r.rule"
-                size="sm"
-                :options="ruleOptions"
-                class="w-24"
-                @update:model-value="r.rule = String($event)"
-              />
-              <Button size="sm" variant="ghost" danger :icon="Trash2" @click="toolRows.splice(i, 1)" />
-            </div>
-            <Button size="sm" variant="outline" :icon="Plus" @click="toolRows.push({ tool: '', rule: 'ask' })">
-              添加规则
-            </Button>
           </div>
 
           <!-- 用户自定义 CA 证书 -->
@@ -935,68 +887,47 @@ const themeOptions = [
           </div>
         </template>
 
-        <!-- MCP -->
+        <!-- MCP：仅支持网络服务 -->
         <template v-else-if="tab === 'mcp'">
-          <h2 class="mb-4 text-lg font-semibold">MCP 工具</h2>
-          <div class="rounded-xl border border-zinc-200 p-4 dark:border-zinc-800">
-            <div class="mb-2 text-sm font-medium text-zinc-600 dark:text-zinc-400">内置预设（点击添加）</div>
-            <div class="flex flex-wrap gap-2">
-              <Button
-                v-for="(_, name) in mcpPresets"
-                :key="name"
-                size="sm"
-                variant="outline"
-                :icon="Plus"
-                :disabled="isMcpAdded(name)"
-                @click="addMcpPreset(name)"
-              >
-                {{ name }}
-              </Button>
-            </div>
+          <div class="mb-4 flex items-center justify-between">
+            <h2 class="text-lg font-semibold">MCP 连接</h2>
+            <Button size="sm" variant="outline" :icon="Plus" @click="addMcpServer">添加连接</Button>
           </div>
-
-          <div class="mt-4 rounded-xl border border-zinc-200 p-4 dark:border-zinc-800">
+          <p class="mb-3 text-xs text-zinc-500">
+            仅支持网络方式（Streamable HTTP / SSE 的 http/https 地址）；本地命令方式已不再提供。
+          </p>
+          <div v-if="!mcpServers.length" class="rounded-xl border border-dashed border-zinc-300 p-8 text-center text-sm text-zinc-400 dark:border-zinc-700">
+            暂无 MCP 连接
+          </div>
+          <div
+            v-for="(srv, i) in mcpServers"
+            :key="i"
+            class="mb-2 rounded-lg border border-zinc-200 p-3 dark:border-zinc-800"
+          >
             <div class="mb-2 flex items-center gap-2">
-              <span class="flex-1 text-sm font-medium text-zinc-600 dark:text-zinc-400">已添加的 MCP 服务器</span>
-              <Select v-model="newMcpType" :options="mcpTypeOptions" size="sm" class="w-64" />
-              <Button size="sm" variant="outline" :icon="Plus" @click="addMcpTyped">添加</Button>
+              <Chip size="sm" variant="secondary">网络</Chip>
+              <Input v-model="srv.name" size="sm" placeholder="连接名称（如 github）" class="w-48" />
+              <span class="flex-1" />
+              <Button size="sm" variant="ghost" danger :icon="Trash2" @click="mcpServers.splice(i, 1)" />
             </div>
-            <div v-if="!mcpServers.length" class="text-xs text-zinc-400">暂未添加 MCP 服务器</div>
-            <div
-              v-for="(srv, i) in mcpServers"
-              :key="i"
-              class="mb-2 rounded-lg border border-zinc-200 p-2.5 dark:border-zinc-800"
-            >
-              <div class="mb-1.5 flex items-center gap-2">
-                <Chip size="sm" variant="secondary">{{ srv.type === 'http' ? '远程服务' : '本地命令' }}</Chip>
-                <Input v-model="srv.name" size="sm" placeholder="服务器名称" class="w-40" />
-                <span class="flex-1" />
-                <Button size="sm" variant="ghost" danger :icon="Trash2" @click="mcpServers.splice(i, 1)" />
-              </div>
-              <div v-if="srv.type === 'http'" class="grid grid-cols-1 gap-1">
-                <Input v-model="srv.url" size="sm" placeholder="服务地址（https://...）" />
-              </div>
-              <div v-else class="grid grid-cols-2 gap-1">
-                <Input v-model="srv.command" size="sm" placeholder="启动命令（如 python / uvx / ./server）" class="col-span-2" />
-                <Input :model-value="(srv.args || []).join(' ')" size="sm" placeholder="参数（空格分隔，如 -m mcp_server_git）" class="col-span-2" @update:model-value="srv.args = String($event).split(' ')" />
-              </div>
-            </div>
+            <Input v-model="srv.url" size="sm" placeholder="服务地址（https://example.com/mcp）" />
           </div>
           <p class="mt-3 text-xs text-zinc-400">
-            保存后，MCP 工具会以「工具」页面可管理；工具名格式为 mcp__服务器名__工具名。
+            保存后可在「工具管理」页查看与设置其工具的权限；工具名格式为 mcp__连接名__工具名。
           </p>
         </template>
 
         <!-- 外观 -->
         <template v-else-if="tab === 'appearance'">
           <h2 class="mb-4 text-lg font-semibold">外观</h2>
+
           <div class="rounded-xl border border-zinc-200 p-4 dark:border-zinc-800">
             <div class="mb-2 text-sm font-medium">明暗模式</div>
             <div class="flex gap-2">
               <button
                 v-for="opt in themeOptions"
                 :key="opt.value"
-                class="flex flex-1 items-center justify-center gap-2 rounded-lg border p-3 text-sm transition-colors"
+                class="flex flex-1 items-center justify-center gap-2 rounded-lg border p-2.5 text-sm transition-colors"
                 :class="
                   themeMode === opt.value
                     ? 'border-zinc-900 bg-zinc-100 dark:border-zinc-100 dark:bg-zinc-800'
@@ -1039,7 +970,72 @@ const themeOptions = [
                 液态玻璃
               </button>
             </div>
-            <p class="mt-2 text-xs text-zinc-500">液态玻璃：半透明毛玻璃面板 + 渐变背景，立即生效并记住选择。</p>
+
+            <template v-if="skin === 'glass'">
+              <div class="mt-4 space-y-3">
+                <div>
+                  <div class="mb-1.5 text-xs text-zinc-500">玻璃强度</div>
+                  <div class="flex gap-2">
+                    <button
+                      v-for="opt in glassOptions"
+                      :key="opt.value"
+                      class="flex-1 rounded-lg border py-1.5 text-xs transition-colors"
+                      :class="
+                        glassLevel === opt.value
+                          ? 'border-zinc-900 bg-zinc-100 dark:border-zinc-100 dark:bg-zinc-800'
+                          : 'border-zinc-200 hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800/60'
+                      "
+                      @click="setGlassLevel(opt.value as any)"
+                    >
+                      {{ opt.label }}
+                    </button>
+                  </div>
+                </div>
+                <div>
+                  <div class="mb-1.5 text-xs text-zinc-500">背景风格</div>
+                  <div class="flex gap-2">
+                    <button
+                      v-for="opt in bgOptions"
+                      :key="opt.value"
+                      class="flex-1 rounded-lg border py-1.5 text-xs transition-colors"
+                      :class="
+                        bgStyle === opt.value
+                          ? 'border-zinc-900 bg-zinc-100 dark:border-zinc-100 dark:bg-zinc-800'
+                          : 'border-zinc-200 hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800/60'
+                      "
+                      @click="setBgStyle(opt.value as any)"
+                    >
+                      {{ opt.label }}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </template>
+          </div>
+
+          <div class="mt-4 grid grid-cols-2 gap-2 rounded-xl border border-zinc-200 p-4 dark:border-zinc-800">
+            <div>
+              <div class="mb-1.5 text-xs text-zinc-500">圆角</div>
+              <div class="flex gap-2">
+                <button
+                  v-for="opt in radiusOptions"
+                  :key="opt.value"
+                  class="flex-1 rounded-lg border py-1.5 text-xs transition-colors"
+                  :class="
+                    radius === opt.value
+                      ? 'border-zinc-900 bg-zinc-100 dark:border-zinc-100 dark:bg-zinc-800'
+                      : 'border-zinc-200 hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800/60'
+                  "
+                  @click="setRadius(opt.value as any)"
+                >
+                  {{ opt.label }}
+                </button>
+              </div>
+            </div>
+            <label class="flex items-center justify-between gap-2 self-end rounded-lg border border-zinc-200 p-2.5 text-sm dark:border-zinc-700">
+              <span>界面动画</span>
+              <Switch :model-value="anim" size="sm" @update:model-value="setAnim(!!$event)" />
+            </label>
           </div>
         </template>
       </div>

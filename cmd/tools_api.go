@@ -36,7 +36,7 @@ func (st *serverState) handleToolsList(w http.ResponseWriter, r *http.Request) {
 
 	// 内置工具
 	reg := agent.NewRegistry()
-	agent.RegisterDefaultTools(reg, agent.ShellConfig{Path: s.ShellPath, Sandbox: s.Sandbox, Image: s.SandboxImage})
+	agent.RegisterDefaultTools(reg, agent.ShellConfig{Path: s.ShellPath})
 	for _, name := range reg.Names() {
 		t, _ := reg.Get(name)
 		tools = append(tools, toolInfo{

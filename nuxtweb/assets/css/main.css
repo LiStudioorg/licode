@@ -126,64 +126,129 @@ body {
 }
 
 /* ===== 液态玻璃皮肤（html.glass）===== */
+html.glass {
+  --glass-blur: 24px;
+  --glass-panel: rgba(255, 255, 255, 0.42);
+  --glass-border: rgba(255, 255, 255, 0.55);
+  --glass-hi: rgba(255, 255, 255, 0.78);
+}
+html.glass[data-glass='soft'] {
+  --glass-blur: 14px;
+  --glass-panel: rgba(255, 255, 255, 0.55);
+}
+html.glass[data-glass='strong'] {
+  --glass-blur: 36px;
+  --glass-panel: rgba(255, 255, 255, 0.26);
+  --glass-border: rgba(255, 255, 255, 0.4);
+  --glass-hi: rgba(255, 255, 255, 0.62);
+}
+
 html.glass body {
   background:
-    radial-gradient(1200px 800px at 10% -10%, rgba(129, 140, 248, 0.35), transparent 60%),
-    radial-gradient(1000px 700px at 110% 10%, rgba(244, 114, 182, 0.28), transparent 55%),
-    radial-gradient(900px 700px at 50% 120%, rgba(56, 189, 248, 0.30), transparent 60%),
-    linear-gradient(135deg, #eef2ff 0%, #faf5ff 45%, #ecfeff 100%);
+    radial-gradient(1100px 700px at 8% -10%, rgba(99, 102, 241, 0.45), transparent 62%),
+    radial-gradient(900px 650px at 108% 6%, rgba(236, 72, 153, 0.38), transparent 58%),
+    radial-gradient(1000px 750px at 52% 118%, rgba(14, 165, 233, 0.42), transparent 60%),
+    linear-gradient(135deg, #eef2ff 0%, #fdf4ff 46%, #ecfeff 100%);
   background-attachment: fixed;
 }
 html.glass.dark body {
   background:
-    radial-gradient(1200px 800px at 10% -10%, rgba(79, 70, 229, 0.35), transparent 60%),
-    radial-gradient(1000px 700px at 110% 10%, rgba(219, 39, 119, 0.22), transparent 55%),
-    radial-gradient(900px 700px at 50% 120%, rgba(14, 165, 233, 0.25), transparent 60%),
-    linear-gradient(135deg, #09090b 0%, #17123a 50%, #082f49 100%);
+    radial-gradient(1100px 700px at 8% -10%, rgba(79, 70, 229, 0.5), transparent 62%),
+    radial-gradient(900px 650px at 108% 6%, rgba(219, 39, 119, 0.32), transparent 58%),
+    radial-gradient(1000px 750px at 52% 118%, rgba(2, 132, 199, 0.36), transparent 60%),
+    linear-gradient(135deg, #07070b 0%, #17123a 50%, #06283d 100%);
   background-attachment: fixed;
 }
+html.glass[data-bg='plain'] body {
+  background: #eef1f7;
+}
+html.glass.dark[data-bg='plain'] body {
+  background: #0b0b0f;
+}
 
-/* 半透明面板 + 背景模糊（覆盖 Tailwind 的不透明背景色） */
+/* 半透明面板 + 背景模糊 */
 html.glass .bg-white {
-  background-color: rgba(255, 255, 255, 0.55) !important;
-  backdrop-filter: blur(18px) saturate(1.5);
-  -webkit-backdrop-filter: blur(18px) saturate(1.5);
+  background-color: var(--glass-panel) !important;
+  backdrop-filter: blur(var(--glass-blur)) saturate(1.8);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(1.8);
 }
 html.glass.dark .dark\:bg-zinc-900 {
-  background-color: rgba(24, 24, 27, 0.55) !important;
-  backdrop-filter: blur(18px) saturate(1.4);
-  -webkit-backdrop-filter: blur(18px) saturate(1.4);
+  background-color: rgba(20, 20, 26, 0.5) !important;
+  backdrop-filter: blur(var(--glass-blur)) saturate(1.6);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(1.6);
 }
 html.glass.dark .dark\:bg-zinc-950 {
-  background-color: rgba(9, 9, 11, 0.45) !important;
-  backdrop-filter: blur(18px) saturate(1.4);
-  -webkit-backdrop-filter: blur(18px) saturate(1.4);
+  background-color: rgba(8, 8, 12, 0.42) !important;
+  backdrop-filter: blur(var(--glass-blur)) saturate(1.6);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(1.6);
 }
 html.glass .bg-zinc-50 {
-  background-color: rgba(250, 250, 250, 0.45) !important;
-  backdrop-filter: blur(14px);
-  -webkit-backdrop-filter: blur(14px);
+  background-color: rgba(255, 255, 255, 0.38) !important;
+  backdrop-filter: blur(calc(var(--glass-blur) * 0.6));
+  -webkit-backdrop-filter: blur(calc(var(--glass-blur) * 0.6));
 }
 html.glass .bg-zinc-100 {
-  background-color: rgba(244, 244, 245, 0.6) !important;
+  background-color: rgba(255, 255, 255, 0.5) !important;
 }
 html.glass.dark .dark\:bg-zinc-800,
 html.glass.dark .dark\:bg-zinc-800\/60 {
-  background-color: rgba(39, 39, 42, 0.6) !important;
+  background-color: rgba(39, 39, 46, 0.55) !important;
 }
 
-/* 玻璃卡片/弹层：更明显的圆角与高光 */
+/* 玻璃卡片：内高光 + 柔和投影 + 亮边 */
 html.glass .rounded-xl,
 html.glass .rounded-2xl {
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.5), 0 8px 24px rgba(15, 23, 42, 0.08);
+  border: 1px solid var(--glass-border) !important;
+  box-shadow:
+    inset 0 1px 0 var(--glass-hi),
+    inset 0 -1px 0 rgba(255, 255, 255, 0.12),
+    0 12px 32px rgba(15, 23, 42, 0.14) !important;
 }
 html.glass.dark .rounded-xl,
 html.glass.dark .rounded-2xl {
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08), 0 8px 24px rgba(0, 0, 0, 0.35);
+  border-color: rgba(255, 255, 255, 0.14) !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.16),
+    0 14px 36px rgba(0, 0, 0, 0.5) !important;
 }
+
+/* 输入框/按钮玻璃化 */
+html.glass input,
+html.glass textarea,
+html.glass select {
+  background-color: rgba(255, 255, 255, 0.38) !important;
+  border-color: var(--glass-border) !important;
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+}
+html.glass.dark input,
+html.glass.dark textarea,
+html.glass.dark select {
+  background-color: rgba(30, 30, 36, 0.45) !important;
+  border-color: rgba(255, 255, 255, 0.14) !important;
+}
+html.glass button {
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+}
+
+/* 分隔线淡化 */
 html.glass .border-zinc-200 {
-  border-color: rgba(255, 255, 255, 0.55) !important;
+  border-color: var(--glass-border) !important;
 }
 html.glass.dark .dark\:border-zinc-800 {
   border-color: rgba(255, 255, 255, 0.12) !important;
+}
+
+/* 大圆角 */
+html.radius-lg .rounded-lg { border-radius: 0.875rem !important; }
+html.radius-lg .rounded-xl { border-radius: 1.25rem !important; }
+html.radius-lg .rounded-2xl { border-radius: 1.75rem !important; }
+
+/* 关闭动画 */
+html.no-anim *,
+html.no-anim *::before,
+html.no-anim *::after {
+  transition: none !important;
+  animation: none !important;
 }

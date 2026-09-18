@@ -55,30 +55,46 @@ func handleSessionExport(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write([]byte(body))
 }
 
-// shellCandidates 常见 shell 路径，尽量先绝对路径。
+// shellCandidates 常见 shell 绝对路径，尽量先绝对路径。
 var shellCandidates = []string{
 	"/bin/sh", "/bin/bash", "/usr/bin/bash", "/bin/zsh", "/usr/bin/zsh",
 	"/bin/fish", "/usr/bin/fish", "/usr/bin/dash", "/bin/dash",
 	"/usr/bin/ksh", "/bin/ksh", "/usr/bin/pwsh", "/usr/bin/powershell",
 }
 
-// handleShells 探测本机可用 shell（去重，分别对绝对路径与 PATH 查一次）。
+// shellNames 常见 shell 名，用于 PATH 与环境目录查找（Termux 等系统的
+// shell 不在 /bin，必须按名称查 PATH）。
+var shellNames = []string{"sh", "bash", "dash", "zsh", "fish", "ksh", "pwsh", "powershell"}
+
+// handleShells 探测本机可用 shell：绝对路径 + PATH 名称 + $SHELL + Termux $PREFIX/bin。
 func handleShells(w http.ResponseWriter, r *http.Request) {
 	seen := map[string]bool{}
-	check := func(c string) {
-		if seen[c] {
+	add := func(p string) {
+		p = strings.TrimSpace(p)
+		if p == "" {
 			return
 		}
-		if st, err := os.Stat(c); err == nil && !st.IsDir() && st.Mode()&0o111 != 0 {
-			seen[c] = true
+		clean := filepath.Clean(p)
+		if seen[clean] {
 			return
 		}
-		if p, err := exec.LookPath(c); err == nil && !seen[p] {
-			seen[p] = true
+		if st, err := os.Stat(clean); err == nil && !st.IsDir() && st.Mode()&0o111 != 0 {
+			seen[clean] = true
 		}
 	}
 	for _, c := range shellCandidates {
-		check(c)
+		add(c)
+	}
+	for _, n := range shellNames {
+		if p, err := exec.LookPath(n); err == nil {
+			add(p)
+		}
+	}
+	add(os.Getenv("SHELL"))
+	if prefix := os.Getenv("PREFIX"); prefix != "" {
+		for _, n := range shellNames {
+			add(filepath.Join(prefix, "bin", n))
+		}
 	}
 	out := make([]string, 0, len(seen))
 	for k := range seen {

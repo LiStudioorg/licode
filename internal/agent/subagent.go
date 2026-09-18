@@ -24,8 +24,6 @@ type SubAgentSpec struct {
 	MaxTokens     int
 	ShellPath     string // Shell 路径（默认 /bin/sh）
 	Timeout       int    // 硬超时（秒，0=不限制）
-	Sandbox       bool   // 使用 Docker 沙箱
-	SandboxImage  string // 沙箱镜像
 	// permissions/ask 由 RegisterSubAgents 从主 Agent 继承：
 	// 子代理绝不能绕过主 Agent 的工具权限与人工确认门禁。
 	permissions map[string]string
@@ -37,7 +35,7 @@ func (s SubAgentSpec) buildAgent() *Agent {
 	a := NewAgent(s.Client, s.Prompt)
 	a.Name = s.Name
 	a.Timeout = s.Timeout
-	a.Shell = ShellConfig{Path: s.ShellPath, Sandbox: s.Sandbox, Image: s.SandboxImage}
+	a.Shell = ShellConfig{Path: s.ShellPath}
 	a.Permissions = s.permissions
 	a.Ask = s.ask
 	if s.Tools != nil {
@@ -209,35 +207,30 @@ func DefaultSubAgentSpecs(client ai.LLMClient, sh ShellConfig, subTimeout int) [
 			Prompt: `你是代码探索子代理。使用你的读/搜索工具调查代码库，并给出具体结论：
 涉及的文件、关键函数（带 文件:行号 引用）、各部分如何组合。请保持彻底
 且实事求是。不要修改文件。请用简体中文汇报。`,
-			Tools:       []string{"Read", "ListDirectory", "Glob", "Grep"},
-			Client:      client,
-			ShellPath:   sh.Path,
-			Sandbox:     sh.Sandbox,
-			SandboxImage: sh.Image,
-			Timeout:     subTimeout,
+			Tools:     []string{"Read", "ListDirectory", "Glob", "Grep"},
+			Client:    client,
+			ShellPath: sh.Path,
+			Timeout:   subTimeout,
 		},
 		{
 			Name: "builder",
 			Prompt: `你是构建子代理。通过写入或编辑文件实现所要求的改动，然后用
 Shell 运行构建/测试命令进行验证。最后总结改动内容、涉及的文件以及
 验证结果。请用简体中文汇报。`,
-			Tools:        []string{"Read", "Write", "Edit", "ListDirectory", "Grep", "Glob", "Shell"},
-			Client:       client,
-			ShellPath:    sh.Path,
-			Sandbox:      sh.Sandbox,
-			SandboxImage: sh.Image,
-			Timeout:      subTimeout,
+			Tools:     []string{"Read", "Write", "Edit", "ListDirectory", "Grep", "Glob", "Shell"},
+			Client:    client,
+			ShellPath: sh.Path,
+			Timeout:   subTimeout,
 		},
 		{
 			Name: "planner",
 			Prompt: `你是规划子代理。你没有工具。给定一个任务，输出一份简洁、可逐步执行的
 实现计划：有序、可操作，并列出可能涉及的文件。不要写代码。请用简体中文
 汇报。`,
-			Tools:       []string{},
-			Client:      client,
-			ShellPath:   sh.Path,
-			Sandbox:     sh.Sandbox,
-			Timeout:     subTimeout,
+			Tools:     []string{},
+			Client:    client,
+			ShellPath: sh.Path,
+			Timeout:   subTimeout,
 		},
 	}
 }

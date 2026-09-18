@@ -155,18 +155,13 @@ func intArg(args map[string]any, key string, def int) int {
 
 // ShellConfig 配置 Shell 工具执行方式。
 type ShellConfig struct {
-	Path    string // shell 可执行文件（默认 /bin/sh）
-	Sandbox bool   // 使用 Docker 沙箱隔离执行
-	Image   string // 沙箱镜像（默认 alpine:latest）
+	Path string // shell 可执行文件（默认 /bin/sh）
 }
 
 func (c *ShellConfig) resolve() {
 	c.Path = strings.TrimSpace(c.Path)
 	if c.Path == "" {
 		c.Path = "/bin/sh"
-	}
-	if c.Sandbox && strings.TrimSpace(c.Image) == "" {
-		c.Image = "alpine:latest"
 	}
 }
 
@@ -493,27 +488,9 @@ func RegisterDefaultTools(r *Registry, sh ShellConfig) {
 			}
 			cmdCtx, cancel := context.WithTimeout(ctx, timeout)
 			defer cancel()
-			var cmd *exec.Cmd
-			if sh.Sandbox {
-				// Docker 沙箱隔离执行：只读挂载工作区到 /work，命令在容器内运行。
-				// cwd 未指定时挂载当前工作目录，否则 -w /work 指向不存在的目录。
-				img := sh.Image
-				if cwd == "" {
-					if wd, werr := os.Getwd(); werr == nil {
-						cwd = wd
-					}
-				}
-				dargs := []string{"run", "--rm", "-i", "-w", "/work"}
-				if cwd != "" {
-					dargs = append(dargs, "-v", cwd+":/work:ro")
-				}
-				dargs = append(dargs, img, sh.Path, "-c", command)
-				cmd = exec.CommandContext(cmdCtx, "docker", dargs...)
-			} else {
-				cmd = exec.CommandContext(cmdCtx, sh.Path, "-c", command)
-				if cwd != "" {
-					cmd.Dir = cwd
-				}
+			cmd := exec.CommandContext(cmdCtx, sh.Path, "-c", command)
+			if cwd != "" {
+				cmd.Dir = cwd
 			}
 			out, err := cmd.CombinedOutput()
 			s := string(out)

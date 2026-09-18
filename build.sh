@@ -7,6 +7,13 @@ MODULE="licode"
 OUT_DIR="build"
 LDFLAGS="-s -w"
 
+# 版本注入：优先环境变量 VERSION，否则取最近 git tag（去掉 v 前缀），
+# 让二进制 /api/version 与 InfoPanel 显示发行版本而非运行时计数器。
+VERSION="${VERSION:-$(git describe --tags --abbrev=0 2>/dev/null | sed 's/^v//')}"
+if [ -n "$VERSION" ]; then
+    LDFLAGS="$LDFLAGS -X licode/internal/version.Version=$VERSION"
+fi
+
 # ===== 常用平台列表 =====
 PLATFORMS="
 linux/amd64

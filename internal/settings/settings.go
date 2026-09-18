@@ -108,8 +108,6 @@ type Settings struct {
 	SubTimeout    int               `json:"sub_timeout"`    // 子代理硬超时（秒，0=不限制）
 	MaxCtxTokens  int               `json:"max_ctx_tokens"` // 上下文窗口保护阈值（0=关闭）
 	RedactSecrets bool              `json:"redact_secrets"` // 工具输出敏感信息脱敏
-	Sandbox       bool              `json:"sandbox"`        // 使用沙箱执行 Shell（Docker）
-	SandboxImage  string            `json:"sandbox_image"`  // 沙箱镜像（默认 alpine）
 	// 特性1：语义缓存
 	CacheEnabled bool `json:"cache_enabled"` // 开启问题-结果缓存
 	CacheTTL     int  `json:"cache_ttl"`     // 缓存有效期（秒，默认 3600）
@@ -306,7 +304,7 @@ func (s *Settings) BuildAgent(client ai.LLMClient) *agent.Agent {
 	ag.RedactSecrets = s.RedactSecrets
 	ag.ToolAutoRetry = s.ToolAutoRetry
 	ag.ToolRetryMax = s.ToolRetryMax
-	ag.Shell = agent.ShellConfig{Path: s.ShellPath, Sandbox: s.Sandbox, Image: s.SandboxImage}
+	ag.Shell = agent.ShellConfig{Path: s.ShellPath}
 	// 安全默认：未知工具（MCP、外部热加载命令、WASM 插件）一律先 "ask"，
 	// 只读工具显式放行，高风险工具强制 "ask"。防止未配置任何工具规则时
 	// 模型经提示注入通过 MCP/外部工具自主执行任意操作。
@@ -367,8 +365,6 @@ func (s *Settings) Snapshot() Settings {
 		SubTimeout:      s.SubTimeout,
 		MaxCtxTokens:    s.MaxCtxTokens,
 		RedactSecrets:   s.RedactSecrets,
-		Sandbox:         s.Sandbox,
-		SandboxImage:    s.SandboxImage,
 		CacheEnabled:    s.CacheEnabled,
 		CacheTTL:        s.CacheTTL,
 		ToolAutoRetry:   s.ToolAutoRetry,

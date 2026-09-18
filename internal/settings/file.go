@@ -105,10 +105,6 @@ func (s *Settings) mergeFrom(o *Settings) {
 		s.MaxCtxTokens = o.MaxCtxTokens
 	}
 	s.RedactSecrets = o.RedactSecrets
-	s.Sandbox = o.Sandbox
-	if o.SandboxImage != "" {
-		s.SandboxImage = o.SandboxImage
-	}
 	s.CacheEnabled = o.CacheEnabled
 	if o.CacheTTL != 0 {
 		s.CacheTTL = o.CacheTTL

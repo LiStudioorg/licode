@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"os/exec"
 	"strings"
 	"sync"
 	"time"
@@ -57,13 +56,6 @@ func handleReady(st *serverState) http.HandlerFunc {
 			}
 		}
 
-		// Docker 沙箱状态（仅启用沙箱时检查）
-		if s.Sandbox {
-			if !dockerHealthy() {
-				problems = append(problems, "docker_unavailable")
-			}
-		}
-
 		if len(problems) > 0 {
 			writeJSON(w, http.StatusServiceUnavailable, map[string]any{
 				"status": "not_ready", "problems": problems,
@@ -107,14 +99,6 @@ func tcpProbe(hostport string) bool {
 	}
 	conn.Close()
 	return true
-}
-
-// dockerHealthy 快速检测 docker 守护进程是否可用。
-func dockerHealthy() bool {
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, "docker", "info", "--format", "{{.ServerVersion}}")
-	return cmd.Run() == nil
 }
 
 // ragLookup 对当前项目源码做轻量 RAG 检索，返回相关片段文本（供注入系统提示词）。

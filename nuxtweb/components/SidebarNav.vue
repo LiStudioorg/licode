@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Plus, Trash2, Pencil, Check, X, MoreHorizontal, Settings, Download, Wrench } from 'lucide-vue-next'
+import { Plus, Trash2, Pencil, Check, X, MoreHorizontal, Settings, Download } from 'lucide-vue-next'
 import { Message, Dialog, Button, Input, Empty, Menu } from 'fuxsto-design'
 
 const licode = useLicode()
@@ -112,9 +112,6 @@ const statusMap = {
       <span class="h-2 w-2 rounded-full" :class="statusMap[state.wsStatus].cls" />
       {{ statusMap[state.wsStatus].text }}
       <div class="flex-1" />
-      <button class="p-1 text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200" title="工具" @click="navigateTo('/tools')">
-        <Wrench :size="14" />
-      </button>
       <button class="p-1 text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200" title="设置" @click="navigateTo('/settings')">
         <Settings :size="14" />
       </button>
