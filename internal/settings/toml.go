@@ -53,7 +53,8 @@ func GenerateTOML(path string, c TOMLConfig) error {
 		"https = false\n" +
 		"tls_cert = \"\"\n" +
 		"tls_key = \"\"\n"
-	return os.WriteFile(path, []byte(content), 0o644)
+	// config.toml 可能包含明文登录密码，权限收紧为仅属主可读写
+	return os.WriteFile(path, []byte(content), 0o600)
 }
 
 func itoa(n int) string {

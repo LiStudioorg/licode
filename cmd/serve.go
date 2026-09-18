@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/signal"
 	"path"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -74,11 +75,16 @@ func newServeCmd() *cobra.Command {
 			if cfgPath == "" {
 				cfgPath = settings.ConfigTOMLPath()
 			}
+			// 先建目录再读写配置：全新环境下 ~/.licode 尚不存在，
+			// 若先生成 config.toml 会因父目录缺失直接报 no such file or directory。
+			if err := os.MkdirAll(filepath.Dir(cfgPath), 0o700); err != nil {
+				return fmt.Errorf("创建配置目录 %s 失败: %w", filepath.Dir(cfgPath), err)
+			}
 			cfg, err := settings.LoadTOML(cfgPath)
 			if os.IsNotExist(err) {
 				cfg = settings.DefaultTOML()
 				if gerr := settings.GenerateTOML(cfgPath, cfg); gerr != nil {
-					return gerr
+					return fmt.Errorf("生成配置文件 %s 失败: %w", cfgPath, gerr)
 				}
 				log.Printf("已生成配置文件 %s", cfgPath)
 			} else if err != nil {
@@ -156,7 +162,9 @@ func newConnState(sessionsDir string) *connState {
 
 func runServe(opts *ServeOptions) error {
 	// 首次使用自动生成 ~/.licode 数据目录，并启用日志文件
-	_ = settings.EnsureDirs()
+	if err := settings.EnsureDirs(); err != nil {
+		return fmt.Errorf("初始化数据目录失败: %w", err)
+	}
 	if lf, err := settings.LogFile(); err == nil {
 		defer lf.Close()
 		log.SetOutput(io.MultiWriter(os.Stderr, lf))
