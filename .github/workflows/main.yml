@@ -1,0 +1,100 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - '**'                 # 任意 tag 触发
+
+permissions:
+  contents: write
+
+jobs:
+  # ── 1. 枚举所有可稳定交叉编译的平台 ─────────────
+  list-targets:
+    runs-on: ubuntu-latest
+    outputs:
+      targets: ${{ steps.set.outputs.targets }}
+    steps:
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+          cache: false           # 关闭缓存，消除“恢复缓存失败”警告
+      - id: set
+        run: |
+          # ★ 过滤掉必然失败的 AIX / Android / iOS / WASM
+          TARGETS=$(go tool dist list | grep -vE '^(aix|android|ios|js|wasip1)/' | awk -F/ '{printf "{\"goos\":\"%s\",\"goarch\":\"%s\"},", $1, $2}')
+          echo "targets=[${TARGETS%,}]" >> "$GITHUB_OUTPUT"
+
+  # ── 2. 矩阵并行：全平台纯静态编译 ─────────────
+  build:
+    needs: list-targets
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target: ${{ fromJSON(needs.list-targets.outputs.targets) }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+          cache: false
+
+      - name: Build static binary
+        env:
+          GOOS: ${{ matrix.target.goos }}
+          GOARCH: ${{ matrix.target.goarch }}
+          CGO_ENABLED: '0'                  # ★ 纯静态链接，最稳！
+        run: |
+          set -e
+          APP=$(basename "$GITHUB_REPOSITORY")
+          VER=${GITHUB_REF_NAME#v}
+
+          ext=""
+          [ "$GOOS" = "windows" ] && ext=".exe"
+
+          mkdir -p dist
+          # ★ 不添加 -X main.version，防止代码里没定义 version 变量导致编译失败
+          # 如果你的代码里确实有 var version string，可以加回 -X main.version=${VER}
+          go build -trimpath -ldflags "-s -w" \
+            -o "dist/${APP}_${VER}_${GOOS}_${GOARCH}${ext}" .
+
+          # 打包压缩
+          cd dist
+          if [ "$GOOS" = "windows" ]; then
+            zip -q "${APP}_${VER}_${GOOS}_${GOARCH}.zip" "${APP}_${VER}_${GOOS}_${GOARCH}.exe"
+            rm "${APP}_${VER}_${GOOS}_${GOARCH}.exe"
+          else
+            tar -czf "${APP}_${VER}_${GOOS}_${GOARCH}.tar.gz" "${APP}_${VER}_${GOOS}_${GOARCH}"
+            rm "${APP}_${VER}_${GOOS}_${GOARCH}"
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bin-${{ matrix.target.goos }}-${{ matrix.target.goarch }}
+          path: dist/
+          if-no-files-found: ignore
+
+  # ── 3. 汇总发布 ─────────────────────────────────
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Generate checksums
+        run: |
+          cd artifacts
+          sha256sum * > checksums.txt
+          echo "共 $(ls | wc -l) 个文件"
+          ls -lh
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/*
+          generate_release_notes: true
+          draft: false
