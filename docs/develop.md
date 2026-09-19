@@ -42,6 +42,20 @@ go test ./...         # 全部测试
 - `internal/plugin`：清单校验、zip 安装、权限确认与设置持久化
 - `internal/session`：会话分支与磁盘加载排序
 
+## GitHub 网络受限时
+
+`./github-ip.sh` 可探测可用的 GitHub IP，并在推送时起本地 CONNECT 代理：
+
+```bash
+./github-ip.sh                     # 列出可达 IP
+./github-ip.sh --best              # 输出第一个可达 IP
+./github-ip.sh --push origin main  # 自动选 IP，经代理执行 git push
+GH_IP=20.27.177.113 ./github-ip.sh --push origin main   # 强制指定 IP
+```
+
+- 探测使用 `curl --resolve`，无需 root、不改 hosts
+- `--push` 需要本机有 Go（临时生成并编译一个 CONNECT 代理，TLS 仍按原域名校验）
+
 ## 设计要点
 
 - 一切 UI 文案简体中文默认；不依赖 CGO（CGO_ENABLED=0）
