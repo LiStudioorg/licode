@@ -36,8 +36,8 @@ github-ip.sh — 一键探测可用的 GitHub IP；可选用本地 CONNECT 代�
   ./github-ip.sh                    探测候选 IP，按顺序列出可达的
   ./github-ip.sh --best             仅输出第一个可达 IP（供脚本调用）
   ./github-ip.sh --ip 1.2.3.4 ...   追加候选 IP（优先探测，可重复）
-  ./github-ip.sh --push [git 参数]  自动选可达 IP，起本地代理后执行 git
-                                    （默认 `git push origin main`）
+  ./github-ip.sh --push [远端 分支] 自动选可达 IP，起本地代理后执行
+                                    `git push`（默认 origin main）
 
 说明：
   - 探测使用 curl --resolve，无需 root、不改 hosts
@@ -210,7 +210,7 @@ case "$MODE" in
     echo "$ip"
     ;;
   push)
-    [ ${#GIT_ARGS[@]} -eq 0 ] && GIT_ARGS=(push origin main)
+    [ ${#GIT_ARGS[@]} -eq 0 ] && GIT_ARGS=(origin main)
     ip="${GH_IP:-}"
     for round in $(seq 1 "$ROUNDS"); do
       [ -n "$ip" ] || ip="$(pick_best)"
@@ -221,9 +221,9 @@ case "$MODE" in
       fi
       echo "使用 IP：$ip"
       if start_proxy "$ip"; then
-        echo "代理已就绪，执行：git ${GIT_ARGS[*]}"
+        echo "代理已就绪，执行：git push ${GIT_ARGS[*]}"
         if HTTPS_PROXY="http://127.0.0.1:$PORT" HTTP_PROXY="http://127.0.0.1:$PORT" \
-           git "${GIT_ARGS[@]}"; then
+           git push "${GIT_ARGS[@]}"; then
           exit 0
         fi
         echo "git 执行失败，换 IP 重试…" >&2
