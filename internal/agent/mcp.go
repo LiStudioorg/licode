@@ -23,6 +23,7 @@ import (
 	"sync"
 	"time"
 
+	"licode/internal/procutil"
 	"licode/internal/web"
 )
 
@@ -154,7 +155,11 @@ type stdioConn struct {
 }
 
 func newStdioConn(ctx context.Context, s MCPServer) (*stdioConn, error) {
-	cmd := exec.Command(s.Command, s.Args...)
+	bin, err := procutil.ResolveEntry(s.Command)
+	if err != nil {
+		return nil, err
+	}
+	cmd := exec.Command(bin, s.Args...)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return nil, fmt.Errorf("stdin pipe: %w", err)

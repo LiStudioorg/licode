@@ -25,6 +25,7 @@ import (
 
 	"licode/internal/agent"
 	"licode/internal/ai"
+	"licode/internal/plugin"
 	"licode/internal/rag"
 	"licode/internal/session"
 	"licode/internal/settings"
@@ -137,8 +138,9 @@ type serverState struct {
 	mu           sync.RWMutex
 	settings     settings.Settings
 	client       ai.LLMClient
-	shuttingDown bool       // 收到关停信号后置位，拒绝新连接
-	rag          *rag.Index // 特性5：项目源码轻量 RAG 索引（懒构建）
+	shuttingDown bool           // 收到关停信号后置位，拒绝新连接
+	rag          *rag.Index     // 特性5：项目源码轻量 RAG 索引（懒构建）
+	plugins      *plugin.Manager // 进程插件管理器
 }
 
 // connState 保存每个连接独立的会话（多对话）与待确认的工具调用。
@@ -181,6 +183,13 @@ func runServe(opts *ServeOptions) error {
 	}
 
 	st := &serverState{}
+	st.plugins = plugin.NewManager(settings.PluginsStatePath(), settings.PluginDirs()...)
+	pluginCtx, pluginCancel := context.WithCancel(context.Background())
+	st.plugins.Start(pluginCtx)
+	defer func() {
+		pluginCancel()
+		st.plugins.Close()
+	}()
 	st.settings = settings.Defaults()
 	st.settings.ApplyFlags(opts.NoSubAgents)
 
@@ -293,6 +302,10 @@ func runServe(opts *ServeOptions) error {
 				}
 
 			case websocket.TypeMessage:
+				// 插件斜杠命令优先拦截（如 /hello arg）
+				if st.runPluginCommand(ctx, c, msg.Content) {
+					return
+				}
 				if msg.Content == "/clear" {
 					cs.sessions.Current().Clear()
 					c.SendEvent(websocket.ServerEvent{Type: websocket.EvtDone})
@@ -481,6 +494,79 @@ func runServe(opts *ServeOptions) error {
 			return
 		}
 		st.handleToolsDelete(w, r)
+	})
+	// 插件管理（设置页「插件」页签）
+	mux.HandleFunc("/api/plugins", func(w http.ResponseWriter, r *http.Request) {
+		if !auth.require(w, r) {
+			return
+		}
+		st.handlePluginsList(w, r)
+	})
+	mux.HandleFunc("/api/plugins/enable", func(w http.ResponseWriter, r *http.Request) {
+		if !auth.require(w, r) {
+			return
+		}
+		if r.Method != http.MethodPost {
+			writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "仅支持 POST"})
+			return
+		}
+		st.handlePluginsEnable(w, r)
+	})
+	mux.HandleFunc("/api/plugins/disable", func(w http.ResponseWriter, r *http.Request) {
+		if !auth.require(w, r) {
+			return
+		}
+		if r.Method != http.MethodPost {
+			writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "仅支持 POST"})
+			return
+		}
+		st.handlePluginsDisable(w, r)
+	})
+	mux.HandleFunc("/api/plugins/reload", func(w http.ResponseWriter, r *http.Request) {
+		if !auth.require(w, r) {
+			return
+		}
+		if r.Method != http.MethodPost {
+			writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "仅支持 POST"})
+			return
+		}
+		st.handlePluginsReload(w, r)
+	})
+	mux.HandleFunc("/api/plugins/settings", func(w http.ResponseWriter, r *http.Request) {
+		if !auth.require(w, r) {
+			return
+		}
+		if r.Method != http.MethodPost {
+			writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "仅支持 POST"})
+			return
+		}
+		st.handlePluginsSettings(w, r)
+	})
+	mux.HandleFunc("/api/plugins/install", func(w http.ResponseWriter, r *http.Request) {
+		if !auth.require(w, r) {
+			return
+		}
+		if r.Method != http.MethodPost {
+			writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "仅支持 POST"})
+			return
+		}
+		st.handlePluginsInstall(w, r)
+	})
+	mux.HandleFunc("/api/plugins/delete", func(w http.ResponseWriter, r *http.Request) {
+		if !auth.require(w, r) {
+			return
+		}
+		if r.Method != http.MethodPost {
+			writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "仅支持 POST"})
+			return
+		}
+		st.handlePluginsDelete(w, r)
+	})
+	mux.HandleFunc("/api/plugins/panel", func(w http.ResponseWriter, r *http.Request) {
+		if !auth.require(w, r) {
+			return
+		}
+		st.handlePluginsPanel(w, r)
 	})
 	mux.HandleFunc("/api/version", func(w http.ResponseWriter, r *http.Request) {
 		if !auth.require(w, r) {
@@ -683,8 +769,9 @@ func runServe(opts *ServeOptions) error {
 		defer cancel()
 		// 等待当前 HTTP/WebSocket 请求（含正在运行的 DAG 子代理与 Shell 脚本）自然完成或超时
 		_ = srv.Shutdown(ctx)
-		// 关闭 MCP 子进程，避免资源泄漏/数据损坏
+		// 关闭 MCP 子进程与插件进程，避免资源泄漏/数据损坏
 		agent.CloseMCPClients()
+		st.plugins.Close()
 		log.Printf("已停止")
 	}()
 
@@ -757,6 +844,43 @@ func reloadServerSettings(st *serverState) error {
 	return nil
 }
 
+// registerPluginTools 把运行中插件贡献的工具/提示词/钩子装进本次 Agent。
+func registerPluginTools(ag *agent.Agent, mgr *plugin.Manager) {
+	if mgr == nil {
+		return
+	}
+	for _, p := range mgr.Running() {
+		man := p.Manifest
+		if man.Prompt != "" {
+			ag.System += "\n\n" + man.Prompt
+		}
+		for _, t := range man.Contributes.Tools {
+			pp, tt := p, t
+			name := man.ToolName(tt.Name)
+			desc := tt.Description
+			if desc == "" {
+				desc = tt.Name
+			}
+			_ = ag.Tools.Register(agent.Tool{
+				Name:        name,
+				Description: "插件「" + man.Name + "」：" + desc,
+				Schema:      tt.Schema,
+				Run: func(ctx context.Context, args map[string]any) (string, error) {
+					return pp.CallTool(ctx, tt.Name, args)
+				},
+			})
+		}
+	}
+	if len(mgr.Running()) > 0 {
+		ag.OnUserMessage = func(ctx context.Context, content string) (string, error) {
+			return mgr.HookUserMessage(ctx, content), nil
+		}
+		ag.OnBeforeTool = mgr.HookBeforeTool
+		ag.OnAfterTool = mgr.HookAfterTool
+		ag.OnDone = mgr.HookDone
+	}
+}
+
 // runServerAgentWithAttachments 在当前设置下运行一次 Agent，支持附件。
 func runServerAgentWithAttachments(ctx context.Context, st *serverState, cs *connState, c *websocket.Client, content, roleSystem string, attachments []ai.Attachment) {
 	st.mu.RLock()
@@ -770,6 +894,7 @@ func runServerAgentWithAttachments(ctx context.Context, st *serverState, cs *con
 	}
 
 	ag := s.BuildAgent(client)
+	registerPluginTools(ag, st.plugins)
 	if roleSystem != "" {
 		ag.System = roleSystem + "\n" + ag.System
 	}

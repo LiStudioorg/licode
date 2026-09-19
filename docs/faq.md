@@ -45,6 +45,12 @@ chmod +x ./licode && ./licode --host 0.0.0.0 --port 8080
 
 直接编辑 `~/.licode/system-prompt.md`（首次运行自动生成默认内容）；`~/.licode/md/` 下所有 .md 会递归附加为额外提示词。
 
+## 插件怎么开发
+
+插件是独立进程（任意语言），通过 stdio JSON-RPC 与 licode 通信，可贡献工具、斜杠命令、
+提示词、设置界面与只读面板。见 [插件开发指南](plugins.md)；在「设置 → 插件」里可以
+上传 zip 安装、启用（需确认权限）、查看日志。
+
 ## 发行版本不是最新的？
 
 发行版（GitHub/Gitee Releases）可能滞后于仓库代码；要最新请 `./build.sh` 自己编译。

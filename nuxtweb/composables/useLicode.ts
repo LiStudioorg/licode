@@ -317,6 +317,20 @@ function createStore() {
         }
         break
       }
+      case 'plugin_output': {
+        // 插件斜杠命令输出：作为一条独立的助手消息展示（不经过 LLM）
+        const text = String(evt.content ?? '')
+        if (text) {
+          state.messages.push({
+            id: ++msgId,
+            role: 'assistant',
+            blocks: [{ kind: 'text', id: ++blockId, text }],
+          })
+        }
+        state.busy = false
+        state.statusText = ''
+        break
+      }
       case 'reasoning':
         // 模型思考过程（DeepSeek/Claude/Gemini 等），只展示不持久化
         state.reasoning += String(evt.content ?? '')

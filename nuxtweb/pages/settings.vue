@@ -2,7 +2,7 @@
 import {
   X, Plus, Trash2, RefreshCw, CheckCircle2, Loader2, Settings as SettingsIcon,
   ArrowLeft, SlidersHorizontal, Server, Wrench, Blocks, Palette, Sun, Moon,
-  Search, ChevronDown, ChevronRight, Cpu, Sparkles, RefreshCw as Refresh2,
+  Search, ChevronDown, ChevronRight, Cpu, Sparkles, Puzzle, RefreshCw as Refresh2,
 } from 'lucide-vue-next'
 import { Message, Button, Input, Switch, Chip, Select, Dialog, Empty } from 'fuxsto-design'
 import type { ProviderConfig, Settings } from '~/composables/useLicode'
@@ -95,7 +95,7 @@ const {
   setSkin, setMode, setGlassLevel, setBgStyle, setRadius, setAnim, initTheme,
 } = useTheme()
 
-const tab = ref<'basic' | 'providers' | 'advanced' | 'mcp' | 'tools' | 'appearance'>('basic')
+const tab = ref<'basic' | 'providers' | 'advanced' | 'mcp' | 'tools' | 'plugins' | 'appearance'>('basic')
 const local = ref<Settings>({})
 const mcpServers = ref<any[]>([])
 const fetching = ref('')
@@ -139,6 +139,7 @@ const navItems = [
   { id: 'advanced', label: '高级', icon: Wrench },
   { id: 'mcp', label: 'MCP 连接', icon: Blocks },
   { id: 'tools', label: '工具管理', icon: Wrench },
+  { id: 'plugins', label: '插件', icon: Puzzle },
   { id: 'appearance', label: '外观', icon: Palette },
 ] as const
 
@@ -496,6 +497,214 @@ const radiusOptions = [
   { label: '大圆角', value: 'large' },
 ]
 
+// ===== 插件管理（进程插件） =====
+interface PluginInfo {
+  id: string
+  name: string
+  version: string
+  apiVersion: number
+  description?: string
+  author?: string
+  capabilities?: string[]
+  permission_summary?: string[]
+  enabled: boolean
+  acked: boolean
+  running: boolean
+  error?: string
+  tools?: { name: string; description?: string }[]
+  commands?: { name: string; description?: string }[]
+  panels?: { id: string; title?: string; description?: string }[]
+  settings_schema?: any
+  settings?: any
+  prompt?: string
+  logs?: string[]
+  dir: string
+}
+
+const pluginList = ref<PluginInfo[]>([])
+const pluginLoading = ref(false)
+const pluginBusy = ref('')
+const pluginForm = ref<Record<string, Record<string, any>>>({})
+const pluginPanels = ref<Record<string, any>>({})
+const pluginLogsOpen = ref<Record<string, boolean>>({})
+const pluginZipInput = ref<HTMLInputElement | null>(null)
+
+function defaultFor(v: any): any {
+  if (v?.type === 'boolean') return false
+  if (v?.type === 'number' || v?.type === 'integer') return 0
+  if (v?.type === 'array') return []
+  if (Array.isArray(v?.enum) && v.enum.length) return v.enum[0]
+  return ''
+}
+
+function initPluginForm(p: PluginInfo) {
+  const out: Record<string, any> = {}
+  const props = p.settings_schema?.properties
+  if (props && typeof props === 'object') {
+    for (const [k, v] of Object.entries<any>(props)) {
+      const cur = p.settings ? p.settings[k] : undefined
+      out[k] = cur !== undefined ? cur : v?.default !== undefined ? v.default : defaultFor(v)
+    }
+  }
+  pluginForm.value[p.id] = out
+}
+
+function schemaFields(p: PluginInfo): { key: string; label: string; type: string; options?: string[] }[] {
+  const props = p.settings_schema?.properties
+  if (!props || typeof props !== 'object') return []
+  return Object.entries<any>(props).map(([key, v]) => {
+    let type = 'string'
+    if (v?.type === 'boolean') type = 'boolean'
+    else if (v?.type === 'number' || v?.type === 'integer') type = 'number'
+    else if (Array.isArray(v?.enum)) type = 'enum'
+    else if (v?.type === 'array') type = 'array'
+    return { key, label: v?.title || key, type, options: v?.enum }
+  })
+}
+
+async function loadPlugins() {
+  pluginLoading.value = true
+  try {
+    const d = await useApi<{ plugins?: PluginInfo[] }>('/api/plugins')
+    pluginList.value = d.plugins || []
+    for (const p of pluginList.value) {
+      initPluginForm(p)
+      if (p.running && p.panels?.length) {
+        for (const panel of p.panels) loadPanel(p, panel.id)
+      }
+    }
+  } catch (e: any) {
+    Message.error(e?.message || '加载插件失败')
+  } finally {
+    pluginLoading.value = false
+  }
+}
+
+async function postPlugin(path: string, body: any): Promise<any> {
+  const res = await fetch(path, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+    body: JSON.stringify(body),
+  })
+  const data = await res.json().catch(() => ({}))
+  if (!res.ok) {
+    const err: any = new Error(data.error || `请求失败 (${res.status})`)
+    err.data = data
+    throw err
+  }
+  return data
+}
+
+async function enablePlugin(p: PluginInfo) {
+  pluginBusy.value = p.id
+  try {
+    try {
+      await postPlugin('/api/plugins/enable', { id: p.id })
+    } catch (e: any) {
+      if (!e?.data?.need_ack) throw e
+      const lines = (e.data.permission_summary || []).join('\n') || '未声明特殊权限'
+      Dialog.confirm({
+        title: `启用插件「${p.name}」`,
+        content: `该插件声明以下权限（进程插件无法强制沙箱，请只启用可信插件）：\n\n${lines}`,
+        confirmText: '确认启用',
+        onConfirm: async () => {
+          await postPlugin('/api/plugins/enable', { id: p.id, ack: true })
+          Message.success('插件已启用')
+          loadPlugins()
+        },
+      })
+      return
+    }
+    Message.success('插件已启用')
+    loadPlugins()
+  } catch (e: any) {
+    Message.error(e?.message || '启用失败')
+  } finally {
+    pluginBusy.value = ''
+  }
+}
+
+async function disablePlugin(p: PluginInfo) {
+  pluginBusy.value = p.id
+  try {
+    await postPlugin('/api/plugins/disable', { id: p.id })
+    Message.success('插件已停用')
+    loadPlugins()
+  } catch (e: any) {
+    Message.error(e?.message || '停用失败')
+  } finally {
+    pluginBusy.value = ''
+  }
+}
+
+async function reloadPlugin(p: PluginInfo) {
+  pluginBusy.value = p.id
+  try {
+    await postPlugin('/api/plugins/reload', { id: p.id })
+    Message.success('插件已重载')
+    loadPlugins()
+  } catch (e: any) {
+    Message.error(e?.message || '重载失败')
+  } finally {
+    pluginBusy.value = ''
+  }
+}
+
+async function removePlugin(p: PluginInfo) {
+  Dialog.confirm({
+    title: '删除插件',
+    content: `确定删除「${p.name}」？插件目录会移入 .trash，可手动恢复。`,
+    danger: true,
+    confirmText: '删除',
+    onConfirm: async () => {
+      try {
+        await postPlugin('/api/plugins/delete', { id: p.id })
+        Message.success('已删除')
+        loadPlugins()
+      } catch (e: any) {
+        Message.error(e?.message || '删除失败')
+      }
+    },
+  })
+}
+
+async function savePluginSettings(p: PluginInfo) {
+  pluginBusy.value = p.id
+  try {
+    await postPlugin('/api/plugins/settings', { id: p.id, settings: pluginForm.value[p.id] || {} })
+    Message.success('插件设置已保存')
+    loadPlugins()
+  } catch (e: any) {
+    Message.error(e?.message || '保存失败')
+  } finally {
+    pluginBusy.value = ''
+  }
+}
+
+async function loadPanel(p: PluginInfo, panel: string) {
+  try {
+    const data = await useApi<any>(`/api/plugins/panel?id=${encodeURIComponent(p.id)}&panel=${encodeURIComponent(panel)}`)
+    pluginPanels.value[p.id + ':' + panel] = data
+  } catch (e: any) {
+    Message.error(e?.message || '面板加载失败')
+  }
+}
+
+async function installPlugin(e: Event) {
+  const files = (e.target as HTMLInputElement).files
+  if (!files?.length) return
+  const fd = new FormData()
+  fd.append('file', files[0])
+  try {
+    const res = await useApi<{ id: string }>('/api/plugins/install', { method: 'POST', body: fd })
+    Message.success(`插件已安装：${res.id}（默认未启用）`)
+    loadPlugins()
+  } catch (err: any) {
+    Message.error(err?.message || '安装失败')
+  }
+  ;(e.target as HTMLInputElement).value = ''
+}
+
 // ===== 工具管理（内嵌设置页，保留设置侧栏） =====
 interface ToolInfo {
   name: string
@@ -526,6 +735,7 @@ const toolGroupDefs = [
   { id: 'subagent', label: '子代理', icon: Cpu, hint: '把任务拆分给专用子代理执行' },
   { id: 'mcp', label: 'MCP 工具', icon: Blocks, hint: '来自 MCP 连接，删除请移除对应连接' },
   { id: 'external', label: '外部命令工具', icon: Server, hint: '来自 ~/.licode/tools/ 的自定义工具' },
+  { id: 'plugin', label: '插件工具', icon: Puzzle, hint: '来自运行中的进程插件' },
   { id: 'skill', label: '技能', icon: Sparkles, hint: '来自 skills/ 的 Markdown 技能' },
 ] as const
 
@@ -547,6 +757,7 @@ const toolOpen = reactive<Record<string, boolean>>({
   subagent: true,
   mcp: true,
   external: true,
+  plugin: true,
   skill: true,
 })
 
@@ -684,6 +895,7 @@ const toolSourceBadge: Record<string, string> = {
   subagent: '子代理',
   mcp: 'MCP',
   external: '外部命令',
+  plugin: '插件',
   skill: '技能',
 }
 </script>
@@ -1265,6 +1477,138 @@ const toolSourceBadge: Record<string, string> = {
                   </div>
                 </template>
               </div>
+            </div>
+          </div>
+        </template>
+
+        <!-- 插件（进程插件） -->
+        <template v-else-if="tab === 'plugins'">
+          <div class="mb-4 flex flex-wrap items-center gap-2">
+            <h2 class="text-lg font-semibold">插件</h2>
+            <span class="hidden text-xs text-zinc-400 sm:inline">进程插件：可贡献工具、斜杠命令、提示词、设置与面板</span>
+            <span class="flex-1" />
+            <Button size="sm" variant="outline" :icon="Refresh2" :loading="pluginLoading" @click="loadPlugins">刷新</Button>
+            <input ref="pluginZipInput" type="file" accept=".zip" class="hidden" @change="installPlugin" />
+            <Button size="sm" variant="outline" :icon="Plus" @click="pluginZipInput?.click()">安装插件（zip）</Button>
+          </div>
+
+          <div v-if="!pluginList.length" class="rounded-xl border border-dashed border-zinc-300 p-8 text-center text-sm text-zinc-400 dark:border-zinc-700">
+            暂无插件。把插件目录（含 plugin.json）放入 ~/.licode/plugins/，或上传 zip 安装。
+          </div>
+
+          <div v-for="p in pluginList" :key="p.id" class="mb-3 rounded-xl border border-zinc-200 p-4 dark:border-zinc-800">
+            <div class="flex flex-wrap items-center gap-2">
+              <span class="text-sm font-medium">{{ p.name || p.id }}</span>
+              <Chip size="sm" variant="outline">v{{ p.version }}</Chip>
+              <Chip size="sm" variant="secondary">{{ p.running ? '运行中' : p.enabled ? '已启用' : '未启用' }}</Chip>
+              <span class="flex-1" />
+              <Button v-if="!p.enabled" size="sm" variant="primary" :loading="pluginBusy === p.id" @click="enablePlugin(p)">启用</Button>
+              <Button v-else size="sm" variant="outline" :loading="pluginBusy === p.id" @click="disablePlugin(p)">停用</Button>
+              <Button size="sm" variant="ghost" :icon="Refresh2" title="重载" @click="reloadPlugin(p)" />
+              <Button size="sm" variant="ghost" danger :icon="Trash2" title="删除" @click="removePlugin(p)" />
+            </div>
+            <p v-if="p.description" class="mt-1 text-xs text-zinc-500">{{ p.description }}</p>
+            <p v-if="p.error" class="mt-1 flex items-center gap-1 text-xs text-red-500">
+              <X :size="12" /> {{ p.error }}
+            </p>
+            <div v-if="(p.permission_summary || []).length" class="mt-2 flex flex-wrap gap-1">
+              <Chip v-for="s in p.permission_summary" :key="s" size="sm" variant="outline">{{ s }}</Chip>
+            </div>
+            <div class="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-zinc-400">
+              <span v-if="p.tools?.length">工具 {{ p.tools.length }} 个</span>
+              <span v-if="p.commands?.length">命令 {{ p.commands.map((c) => '/' + c.name).join(' ') }}</span>
+              <span v-if="p.panels?.length">面板 {{ p.panels.length }} 个</span>
+              <span class="font-mono">{{ p.id }} · {{ p.dir }}</span>
+            </div>
+
+            <!-- 声明式设置表单 -->
+            <div v-if="schemaFields(p).length" class="mt-3 space-y-2 rounded-lg border border-zinc-200 p-3 dark:border-zinc-800">
+              <div class="text-xs font-medium text-zinc-400">插件设置</div>
+              <label v-for="f in schemaFields(p)" :key="f.key" class="flex items-center justify-between gap-2 text-sm">
+                <span class="shrink-0 text-xs text-zinc-500">{{ f.label }}</span>
+                <Switch
+                  v-if="f.type === 'boolean'"
+                  :model-value="!!(pluginForm[p.id] || {})[f.key]"
+                  size="sm"
+                  @update:model-value="(pluginForm[p.id] || {})[f.key] = !!$event"
+                />
+                <Select
+                  v-else-if="f.type === 'enum'"
+                  :model-value="(pluginForm[p.id] || {})[f.key]"
+                  size="sm"
+                  class="w-48"
+                  :options="(f.options || []).map((o) => ({ label: String(o), value: String(o) }))"
+                  @update:model-value="(pluginForm[p.id] || {})[f.key] = String($event)"
+                />
+                <Input
+                  v-else-if="f.type === 'number'"
+                  :model-value="(pluginForm[p.id] || {})[f.key]"
+                  type="number"
+                  size="sm"
+                  class="w-48"
+                  @update:model-value="(pluginForm[p.id] || {})[f.key] = Number($event) || 0"
+                />
+                <Input
+                  v-else
+                  :model-value="f.type === 'array' ? ((pluginForm[p.id] || {})[f.key] || []).join(',') : (pluginForm[p.id] || {})[f.key]"
+                  size="sm"
+                  class="w-64 max-w-[60%]"
+                  @update:model-value="(pluginForm[p.id] || {})[f.key] = f.type === 'array' ? String($event).split(',').map((x) => x.trim()).filter(Boolean) : String($event)"
+                />
+              </label>
+              <Button size="sm" variant="outline" :loading="pluginBusy === p.id" @click="savePluginSettings(p)">保存插件设置</Button>
+            </div>
+
+            <!-- 声明式面板 -->
+            <div v-for="panel in p.panels || []" :key="panel.id" class="mt-3 rounded-lg border border-zinc-200 dark:border-zinc-800">
+              <div class="flex items-center gap-2 border-b border-zinc-100 px-3 py-2 dark:border-zinc-800">
+                <span class="text-xs font-medium">{{ panel.title || panel.id }}</span>
+                <span class="min-w-0 flex-1 truncate text-[10px] text-zinc-400">{{ panel.description }}</span>
+                <Button size="sm" variant="ghost" :icon="Refresh2" :disabled="!p.running" @click="loadPanel(p, panel.id)">刷新</Button>
+              </div>
+              <div class="max-h-72 overflow-y-auto p-3 text-xs">
+                <template v-if="!pluginPanels[p.id + ':' + panel.id]" class="text-zinc-400">点击「刷新」加载内容</template>
+                <pre
+                  v-else-if="pluginPanels[p.id + ':' + panel.id].type === 'markdown'"
+                  class="whitespace-pre-wrap break-words font-sans leading-relaxed text-zinc-600 dark:text-zinc-300"
+                >{{ pluginPanels[p.id + ':' + panel.id].content }}</pre>
+                <table v-else-if="pluginPanels[p.id + ':' + panel.id].type === 'table'" class="w-full">
+                  <thead>
+                    <tr>
+                      <th
+                        v-for="col in pluginPanels[p.id + ':' + panel.id].columns || []"
+                        :key="col"
+                        class="border-b border-zinc-200 px-2 py-1 text-left font-medium text-zinc-500 dark:border-zinc-700"
+                      >
+                        {{ col }}
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr v-for="(row, ri) in pluginPanels[p.id + ':' + panel.id].rows || []" :key="ri">
+                      <td v-for="(cell, ci) in row" :key="ci" class="border-b border-zinc-100 px-2 py-1 text-zinc-500 dark:border-zinc-800">{{ cell }}</td>
+                    </tr>
+                  </tbody>
+                </table>
+                <div v-else-if="pluginPanels[p.id + ':' + panel.id].type === 'keyvalue'" class="space-y-1">
+                  <div v-for="item in pluginPanels[p.id + ':' + panel.id].items || []" :key="item.key" class="flex gap-2">
+                    <span class="w-32 shrink-0 text-zinc-400">{{ item.key }}</span>
+                    <span class="min-w-0 flex-1 break-words text-zinc-600 dark:text-zinc-300">{{ item.value }}</span>
+                  </div>
+                </div>
+                <div v-else-if="pluginPanels[p.id + ':' + panel.id].type === 'status'" class="text-zinc-600 dark:text-zinc-300">
+                  {{ pluginPanels[p.id + ':' + panel.id].text }}
+                </div>
+                <pre v-else class="whitespace-pre-wrap break-words font-mono text-[11px] text-zinc-500">{{ JSON.stringify(pluginPanels[p.id + ':' + panel.id], null, 2) }}</pre>
+              </div>
+            </div>
+
+            <!-- 日志 -->
+            <div v-if="(p.logs || []).length" class="mt-2">
+              <button class="text-[11px] text-zinc-400 hover:text-zinc-600" @click="pluginLogsOpen[p.id] = !pluginLogsOpen[p.id]">
+                {{ pluginLogsOpen[p.id] ? '收起日志' : `查看日志（${p.logs.length}）` }}
+              </button>
+              <pre v-if="pluginLogsOpen[p.id]" class="mt-1 max-h-40 overflow-y-auto rounded-lg bg-zinc-50 p-2 font-mono text-[10px] leading-relaxed text-zinc-500 dark:bg-zinc-900">{{ p.logs.join('\n') }}</pre>
             </div>
           </div>
         </template>

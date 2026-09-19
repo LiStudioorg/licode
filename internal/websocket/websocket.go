@@ -42,6 +42,8 @@ const (
 	EvtError     = "error"
 	EvtStatus    = "status"
 	EvtReasoning = "reasoning"
+	// EvtPluginOutput 插件斜杠命令的输出（content 为文本）。
+	EvtPluginOutput = "plugin_output"
 	EvtSettings  = "settings"
 	EvtAsk       = "ask"
 	EvtSessions  = "sessions"

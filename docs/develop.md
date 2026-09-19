@@ -27,6 +27,8 @@ go test ./...         # 全部测试
 │   ├── agent/          主 Agent、工具、子代理 DAG、压缩、MCP、Skills
 │   ├── session/        多会话 + 实时落盘
 │   ├── settings/       设置 + ~/.licode 数据目录
+│   ├── plugin/         进程插件：清单/JSON-RPC/管理器/热加载/权限
+│   ├── procutil/       可执行文件解析（规避 Android seccomp 的 SIGSYS）
 │   ├── websocket/      Hub + 事件协议
 │   ├── version/        0.0.0.x 版本计数
 │   └── web/            go:embed Nuxt 前端产物与 CA 证书
@@ -35,11 +37,21 @@ go test ./...         # 全部测试
 
 ## 测试
 
-- `internal/ai`：OpenAI SSE 流式与工具调用解析（mock 服务器）
+- `internal/ai`：OpenAI SSE 流式、工具调用与思考过程解析（mock 服务器）
 - `internal/agent`：工具循环、会话截断、子代理 DAG 顺序/环检测
+- `internal/plugin`：清单校验、zip 安装、权限确认与设置持久化
+- `internal/session`：会话分支与磁盘加载排序
 
 ## 设计要点
 
 - 一切 UI 文案简体中文默认；不依赖 CGO（CGO_ENABLED=0）
 - 系统提示词读取 `~/.licode/system-prompt.md`（可直接改）
-- 版本号 0.0.0.x 跟随 `~/.licode/version` 计数（百进制进位）
+- 版本号 0.0.0.x 跟随 `~/.licode/version` 计数（百进制进位）；发行构建会用
+  `-X licode/internal/version.Version=<tag>` 注入版本
+- 进程插件协议见 `docs/plugins.md`
+
+## 插件开发（进程插件）
+
+- 插件 = 独立进程 + stdio JSON-RPC：贡献工具 / 斜杠命令 / 提示词 / 设置界面 / 只读面板 / 钩子
+- 目录：`~/.licode/plugins/<id>/plugin.json`；支持热加载、权限确认、zip 安装
+- 完整清单字段、RPC 方法与 Python 最小示例：见 [插件开发指南](plugins.md)

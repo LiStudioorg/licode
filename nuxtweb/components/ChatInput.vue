@@ -69,11 +69,33 @@ const slashCommands = [
   { key: '/interrupt', label: '停止生成', desc: '中断当前正在进行的回复', icon: Square, action: () => licode.interrupt() },
 ]
 
+// 插件贡献的斜杠命令（/name，参数直接跟在后面）
+const pluginCommands = ref<{ key: string; label: string; desc: string }[]>([])
+
+onMounted(async () => {
+  try {
+    const d = await useApi<{ plugins?: any[] }>('/api/plugins')
+    pluginCommands.value = (d.plugins || [])
+      .filter((p) => p.running)
+      .flatMap((p) =>
+        (p.commands || []).map((c: any) => ({
+          key: '/' + c.name,
+          label: c.name,
+          desc: (p.name || p.id) + '：' + (c.description || '插件命令'),
+        })),
+      )
+  } catch {}
+})
+
 const filteredCommands = computed(() => {
   const text = input.value.trim().toLowerCase()
   if (!text.startsWith('/')) return []
   const query = text.slice(1)
-  return slashCommands.filter((c) => c.key.includes(query) || c.label.includes(query))
+  const builtin = slashCommands
+    .filter((c) => c.key.includes(query) || c.label.includes(query))
+    .map((c) => ({ ...c }))
+  const plugins = pluginCommands.value.filter((c) => c.key.includes(query) || c.label.includes(query))
+  return [...builtin, ...plugins]
 })
 
 function onInput() {
@@ -98,11 +120,7 @@ function onKeydown(e: KeyboardEvent) {
     if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
       e.preventDefault()
       const cmd = filteredCommands.value[slashMenuIndex.value]
-      if (cmd) {
-        cmd.action()
-        input.value = ''
-        showSlashMenu.value = false
-      }
+      if (cmd) selectCommand(cmd)
       return
     }
     if (e.key === 'Escape') {
@@ -116,10 +134,17 @@ function onKeydown(e: KeyboardEvent) {
   }
 }
 
-function selectCommand(cmd: typeof slashCommands[0]) {
-  cmd.action()
-  input.value = ''
+function selectCommand(cmd: any) {
+  if (typeof cmd.action === 'function') {
+    cmd.action()
+    input.value = ''
+    showSlashMenu.value = false
+    return
+  }
+  // 插件命令：填入命令前缀，让用户补参数后发送
+  input.value = cmd.key + ' '
   showSlashMenu.value = false
+  nextTick(() => taRef.value?.focus())
 }
 
 function autoGrow() {
@@ -291,7 +316,7 @@ function doClear() {
             :class="i === slashMenuIndex ? 'bg-zinc-100 dark:bg-zinc-800' : 'hover:bg-zinc-50 dark:hover:bg-zinc-800/60'"
             @click="selectCommand(cmd)"
           >
-            <component :is="cmd.icon" :size="14" class="shrink-0 text-zinc-400" />
+            <component :is="cmd.icon || Paperclip" :size="14" class="shrink-0 text-zinc-400" />
             <span class="font-medium">{{ cmd.label }}</span>
             <span class="flex-1 truncate text-xs text-zinc-400">{{ cmd.desc }}</span>
             <kbd class="rounded bg-zinc-100 px-1.5 py-0.5 text-[10px] text-zinc-500 dark:bg-zinc-800">{{ cmd.key }}</kbd>

@@ -6,7 +6,7 @@
 
 - Licode 是一个单二进制 Web 应用：Go 后端提供 HTTP/WebSocket/Agent(LLM) 全栈服务，前端为 Nuxt 编译后的静态资源，通过 `go:embed internal/web/nuxt` 嵌入二进制。
 - 入口 `main.go` → `cmd.Execute()` 直接启动 Web 服务器（无子命令）。
-- 核心模块：`cmd/`(HTTP 路由层)、`internal/agent/`(LLM Agent 与工具)、`internal/websocket/`(实时会话)、`internal/ai/`(LLM 客户端抽象)、`internal/settings/`、`internal/backup/`。
+- 核心模块：`cmd/`(HTTP 路由层)、`internal/agent/`(LLM Agent 与工具)、`internal/websocket/`(实时会话)、`internal/ai/`(LLM 客户端抽象)、`internal/settings/`、`internal/plugin/`(进程插件)、`internal/backup/`。
 - 运行数据保存在 `~/.licode/`（config.json、sessions/、session.key 等）。
 
 ## 硬性约束

@@ -51,6 +51,24 @@ func (st *serverState) handleToolsList(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
+	// 插件工具（来自运行中的进程插件）
+	if st.plugins != nil {
+		for _, p := range st.plugins.Running() {
+			man := p.Manifest
+			for _, t := range man.Contributes.Tools {
+				name := man.ToolName(t.Name)
+				desc := t.Description
+				if desc == "" {
+					desc = t.Name
+				}
+				tools = append(tools, toolInfo{
+					Name: name, Description: "插件「" + man.Name + "」：" + desc,
+					Source: "plugin", Rule: s.EffectiveToolRule(name),
+				})
+			}
+		}
+	}
+
 	// 外部命令工具（~/.licode/tools/*.json）
 	for _, t := range agent.ListExternalTools(settings.ToolsDir()) {
 		tools = append(tools, toolInfo{

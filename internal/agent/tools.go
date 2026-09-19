@@ -12,6 +12,8 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
+
+	"licode/internal/procutil"
 )
 
 var (
@@ -486,7 +488,11 @@ func RegisterDefaultTools(r *Registry, sh ShellConfig) {
 			}
 			cmdCtx, cancel := context.WithTimeout(ctx, timeout)
 			defer cancel()
-			cmd := exec.CommandContext(cmdCtx, sh.Path, "-c", command)
+			bin, berr := procutil.ResolveEntry(sh.Path)
+			if berr != nil {
+				return "", berr
+			}
+			cmd := exec.CommandContext(cmdCtx, bin, "-c", command)
 			if cwd == "" {
 				cwd = WorkspaceRoot()
 			}

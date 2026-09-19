@@ -45,6 +45,8 @@
 ├── system-prompt.md  系统提示词（可直接编辑，首次自动生成默认内容）
 ├── md/               附加提示词：递归读取里面所有 .md 追加到系统提示词（默认空）
 ├── skills/           技能（markdown，frontmatter: name/description）
+├── plugins/          进程插件（<id>/plugin.json；见 docs/plugins.md）
+├── plugins.state.json 插件启停/权限确认/插件设置
 ├── mcp/              MCP 服务器配置
 ├── sessions/         对话记录（实时保存，每会话一个 json）
 ├── logs/             日志
