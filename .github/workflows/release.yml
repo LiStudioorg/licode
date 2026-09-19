@@ -1,0 +1,127 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - '**'
+
+permissions:
+  contents: write
+
+jobs:
+  # ── 1. 枚举平台，分流到 Linux / macOS runner ─────────
+  list-targets:
+    runs-on: ubuntu-latest
+    outputs:
+      linux_targets: ${{ steps.set.outputs.linux }}
+      mac_targets:   ${{ steps.set.outputs.mac }}
+    steps:
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+          cache: false
+      - id: set
+        run: |
+          ALL=$(go tool dist list)
+
+          LINUX=$(echo "$ALL" | grep -vE '^ios/' \
+            | awk -F/ '{printf "{\"goos\":\"%s\",\"goarch\":\"%s\"},", $1, $2}')
+          echo "linux=[${LINUX%,}]" >> "$GITHUB_OUTPUT"
+
+          MAC=$(echo "$ALL" | grep -E '^ios/' \
+            | awk -F/ '{printf "{\"goos\":\"%s\",\"goarch\":\"%s\"},", $1, $2}')
+          echo "mac=[${MAC%,}]" >> "$GITHUB_OUTPUT"
+
+  # ── 2a. Linux runner ─────────────────────────────────
+  build-linux:
+    needs: list-targets
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target: ${{ fromJSON(needs.list-targets.outputs.linux_targets) }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+          cache: false
+
+      # ★ 只在 Android 平台启用 NDK 缓存
+      - name: Cache Android NDK
+        if: startsWith(matrix.target.goos, 'android')
+        uses: actions/cache@v4
+        with:
+          path: android-ndk-r26b
+          key: ndk-r26b-${{ runner.os }}
+          restore-keys: |
+            ndk-r26b-
+
+      - name: Build
+        continue-on-error: true
+        env:
+          ENABLE_VERSION_INJECT: '1'
+        run: |
+          chmod +x buildrelease.sh
+          ./buildrelease.sh "${{ matrix.target.goos }}/${{ matrix.target.goarch }}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bin-${{ matrix.target.goos }}-${{ matrix.target.goarch }}
+          path: dist/
+          if-no-files-found: ignore
+
+  # ── 2b. macOS runner（仅 iOS）─────────────────────────
+  build-macos:
+    needs: list-targets
+    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target: ${{ fromJSON(needs.list-targets.outputs.mac_targets) }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+          cache: false
+
+      - name: Build
+        continue-on-error: true
+        env:
+          ENABLE_VERSION_INJECT: '1'
+        run: |
+          chmod +x buildrelease.sh
+          ./buildrelease.sh "${{ matrix.target.goos }}/${{ matrix.target.goarch }}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bin-${{ matrix.target.goos }}-${{ matrix.target.goarch }}
+          path: dist/
+          if-no-files-found: ignore
+
+  # ── 3. 汇总发布 ──────────────────────────────────────
+  release:
+    needs: [build-linux, build-macos]
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Generate checksums
+        run: |
+          cd artifacts
+          sha256sum * > checksums.txt
+          echo "共 $(ls | wc -l) 个文件"
+          ls -lh
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/*
+          generate_release_notes: true
+          draft: false
