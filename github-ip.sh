@@ -19,8 +19,11 @@ fi
 #   - 环境变量：GH_IP 强制指定 IP；GH_PROXY_PORT 代理端口（默认 18081）
 set -uo pipefail
 
-CANDIDATES="20.27.177.113 140.82.112.3 140.82.113.3 140.82.114.3 140.82.116.3
-20.205.243.166 20.26.156.215 20.201.28.151 20.248.137.48 4.237.22.38"
+CANDIDATES="20.27.177.113 140.82.112.3 140.82.112.4 140.82.113.3 140.82.113.4
+140.82.114.3 140.82.114.4 140.82.115.3 140.82.116.3 140.82.116.4 140.82.117.3
+140.82.118.3 140.82.119.3 140.82.120.3 140.82.121.3
+20.205.243.166 20.205.243.168 20.26.156.215 20.201.28.151 20.248.137.48
+4.237.22.38 4.237.22.39 20.233.83.145 20.29.134.23"
 TIMEOUT=5
 ROUNDS=6
 PORT="${GH_PROXY_PORT:-18081}"
@@ -162,6 +165,17 @@ func handle(c net.Conn) {
 }
 GOEOF
   ( cd "$TMP/proxy" && go build -o "$TMP/ghproxy" main.go ) || return 1
+}
+
+# start_proxy 启动（或重启）代理进程并等待就绪
+start_proxy() {
+  local ip="$1"
+  if [ -n "$PROXY_PID" ]; then
+    kill "$PROXY_PID" 2>/dev/null
+    wait "$PROXY_PID" 2>/dev/null
+    PROXY_PID=""
+  fi
+  [ -x "$TMP/ghproxy" ] || build_proxy || return 1
   GH_IP="$ip" GH_PROXY_PORT="$PORT" "$TMP/ghproxy" >"$TMP/proxy.log" 2>&1 &
   PROXY_PID=$!
   # 等代理就绪（最多 15s）
