@@ -91,8 +91,9 @@ type ProviderRow = ProviderConfig & { _newModel?: string }
 const licode = useLicode()
 const { state } = licode
 const {
-  mode: themeMode, skin, glassLevel, bgStyle, radius, anim,
-  setSkin, setMode, setGlassLevel, setBgStyle, setRadius, setAnim, initTheme,
+  mode: themeMode, radius, anim,
+  accent, appBg, bubble,
+  setMode, setRadius, setAnim, setAccent, setAppBg, setBubble, initTheme,
 } = useTheme()
 
 const tab = ref<'basic' | 'providers' | 'advanced' | 'mcp' | 'tools' | 'appearance'>('basic')
@@ -478,19 +479,7 @@ const themeOptions = [
   { label: '浅色', value: 'light' },
   { label: '深色', value: 'dark' },
 ]
-const skinOptions = [
-  { label: '默认', value: 'default' },
-  { label: '液态玻璃', value: 'glass' },
-]
-const glassOptions = [
-  { label: '轻柔', value: 'soft' },
-  { label: '标准', value: 'medium' },
-  { label: '浓厚', value: 'strong' },
-]
-const bgOptions = [
-  { label: '极光渐变', value: 'gradient' },
-  { label: '纯色', value: 'plain' },
-]
+const accentPresets = ['#6366f1', '#0ea5e9', '#10b981', '#f59e0b', '#ef4444', '#ec4899']
 const radiusOptions = [
   { label: '默认', value: 'normal' },
   { label: '大圆角', value: 'large' },
@@ -1302,74 +1291,54 @@ const toolSourceBadge: Record<string, string> = {
           </div>
 
           <div class="mt-4 rounded-xl border border-zinc-200 p-4 dark:border-zinc-800">
-            <div class="mb-2 text-sm font-medium">界面皮肤</div>
-            <div class="flex gap-2">
-              <button
-                class="flex flex-1 flex-col items-start gap-2 rounded-lg border p-3 text-sm transition-colors"
-                :class="
-                  skin === 'default'
-                    ? 'border-zinc-900 dark:border-zinc-100'
-                    : 'border-zinc-200 hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800/60'
-                "
-                @click="setSkin('default')"
-              >
-                <span class="h-10 w-full rounded-md border border-zinc-200 bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-800" />
-                默认
-              </button>
-              <button
-                class="flex flex-1 flex-col items-start gap-2 rounded-lg border p-3 text-sm transition-colors"
-                :class="
-                  skin === 'glass'
-                    ? 'border-zinc-900 dark:border-zinc-100'
-                    : 'border-zinc-200 hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800/60'
-                "
-                @click="setSkin('glass')"
-              >
-                <span class="h-10 w-full rounded-md border border-indigo-200 bg-gradient-to-br from-indigo-200 via-pink-100 to-sky-200 dark:border-indigo-900 dark:from-indigo-900 dark:via-fuchsia-900 dark:to-sky-900" />
-                液态玻璃
-              </button>
-            </div>
-
-            <template v-if="skin === 'glass'">
-              <div class="mt-4 space-y-3">
-                <div>
-                  <div class="mb-1.5 text-xs text-zinc-500">玻璃强度</div>
-                  <div class="flex gap-2">
-                    <button
-                      v-for="opt in glassOptions"
-                      :key="opt.value"
-                      class="flex-1 rounded-lg border py-1.5 text-xs transition-colors"
-                      :class="
-                        glassLevel === opt.value
-                          ? 'border-zinc-900 bg-zinc-100 dark:border-zinc-100 dark:bg-zinc-800'
-                          : 'border-zinc-200 hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800/60'
-                      "
-                      @click="setGlassLevel(opt.value as any)"
-                    >
-                      {{ opt.label }}
-                    </button>
-                  </div>
-                </div>
-                <div>
-                  <div class="mb-1.5 text-xs text-zinc-500">背景风格</div>
-                  <div class="flex gap-2">
-                    <button
-                      v-for="opt in bgOptions"
-                      :key="opt.value"
-                      class="flex-1 rounded-lg border py-1.5 text-xs transition-colors"
-                      :class="
-                        bgStyle === opt.value
-                          ? 'border-zinc-900 bg-zinc-100 dark:border-zinc-100 dark:bg-zinc-800'
-                          : 'border-zinc-200 hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800/60'
-                      "
-                      @click="setBgStyle(opt.value as any)"
-                    >
-                      {{ opt.label }}
-                    </button>
-                  </div>
+            <div class="mb-2 text-sm font-medium">自定义颜色</div>
+            <div class="space-y-4">
+              <div>
+                <div class="mb-1.5 text-xs text-zinc-500">主题强调色（按钮/高亮）</div>
+                <div class="flex items-center gap-2">
+                  <input
+                    type="color"
+                    class="h-8 w-12 cursor-pointer rounded border border-zinc-200 bg-transparent dark:border-zinc-700"
+                    :value="accent"
+                    @input="setAccent(($event.target as HTMLInputElement).value)"
+                  />
+                  <span class="font-mono text-xs text-zinc-400">{{ accent }}</span>
+                  <span class="flex-1" />
+                  <button
+                    v-for="c in accentPresets"
+                    :key="c"
+                    class="h-6 w-6 rounded-full border border-zinc-200 dark:border-zinc-700"
+                    :style="{ backgroundColor: c }"
+                    :title="c"
+                    @click="setAccent(c)"
+                  />
                 </div>
               </div>
-            </template>
+              <div>
+                <div class="mb-1.5 text-xs text-zinc-500">页面背景色</div>
+                <div class="flex items-center gap-2">
+                  <input
+                    type="color"
+                    class="h-8 w-12 cursor-pointer rounded border border-zinc-200 bg-transparent dark:border-zinc-700"
+                    :value="appBg"
+                    @input="setAppBg(($event.target as HTMLInputElement).value)"
+                  />
+                  <span class="font-mono text-xs text-zinc-400">{{ appBg }}</span>
+                </div>
+              </div>
+              <div>
+                <div class="mb-1.5 text-xs text-zinc-500">消息气泡颜色（用户消息）</div>
+                <div class="flex items-center gap-2">
+                  <input
+                    type="color"
+                    class="h-8 w-12 cursor-pointer rounded border border-zinc-200 bg-transparent dark:border-zinc-700"
+                    :value="bubble"
+                    @input="setBubble(($event.target as HTMLInputElement).value)"
+                  />
+                  <span class="font-mono text-xs text-zinc-400">{{ bubble }}</span>
+                </div>
+              </div>
+            </div>
           </div>
 
           <div class="mt-4 grid grid-cols-2 gap-2 rounded-xl border border-zinc-200 p-4 dark:border-zinc-800">

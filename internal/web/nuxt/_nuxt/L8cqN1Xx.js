@@ -1,1 +1,0 @@
-import{d as s,a4 as n,B as a,n as o,A as c}from"./D9JOD8l7.js";const _={class:"flex h-full items-center justify-center text-sm text-zinc-400"},p=s({__name:"tools",async setup(r){let t,e;return[t,e]=n(()=>o("/settings")),await t,e(),(i,l)=>(c(),a("div",_,"正在打开设置…"))}});export{p as default};

@@ -9,7 +9,8 @@ const md = computed(() => (src: string) => renderMarkdown(src))
 <template>
   <div v-if="props.msg.role === 'user'" class="mb-5 flex justify-end">
     <div
-      class="max-w-[85%] whitespace-pre-wrap break-words rounded-2xl rounded-br-md bg-zinc-900 px-4 py-2.5 text-sm leading-relaxed text-zinc-50 dark:bg-zinc-100 dark:text-zinc-900"
+      class="max-w-[85%] whitespace-pre-wrap break-words rounded-2xl rounded-br-md px-4 py-2.5 text-sm leading-relaxed text-zinc-50"
+      :style="{ backgroundColor: 'var(--bubble)' }"
     >
       <div v-if="props.msg.attachments?.length" class="mb-2 flex flex-wrap gap-2">
         <template v-for="att in props.msg.attachments" :key="att.filename">

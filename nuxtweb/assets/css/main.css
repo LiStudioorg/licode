@@ -125,132 +125,16 @@ body {
   background: transparent;
 }
 
-/* ===== 液态玻璃皮肤（html.glass）：iOS 强模糊 ===== */
-html.glass {
-  --glass-blur: 40px;
-  --glass-saturate: 2.2;
-  --glass-panel: rgba(255, 255, 255, 0.28);
-  --glass-border: rgba(255, 255, 255, 0.6);
-  --glass-hi: rgba(255, 255, 255, 0.92);
+/* ===== 自定义颜色（外观页可调） ===== */
+:root {
+  --accent: #6366f1;
+  --app-bg: #f4f4f5;
+  --bubble: #18181b;
 }
-html.glass[data-glass='soft'] {
-  --glass-blur: 24px;
-  --glass-saturate: 1.8;
-  --glass-panel: rgba(255, 255, 255, 0.42);
-}
-html.glass[data-glass='strong'] {
-  --glass-blur: 60px;
-  --glass-saturate: 2.6;
-  --glass-panel: rgba(255, 255, 255, 0.18);
-  --glass-border: rgba(255, 255, 255, 0.5);
-  --glass-hi: rgba(255, 255, 255, 0.75);
+body {
+  background-color: var(--app-bg) !important;
 }
 
-html.glass body {
-  background:
-    radial-gradient(1100px 700px at 8% -10%, rgba(99, 102, 241, 0.45), transparent 62%),
-    radial-gradient(900px 650px at 108% 6%, rgba(236, 72, 153, 0.38), transparent 58%),
-    radial-gradient(1000px 750px at 52% 118%, rgba(14, 165, 233, 0.42), transparent 60%),
-    linear-gradient(135deg, #eef2ff 0%, #fdf4ff 46%, #ecfeff 100%);
-  background-attachment: fixed;
-}
-html.glass.dark body {
-  background:
-    radial-gradient(1100px 700px at 8% -10%, rgba(79, 70, 229, 0.5), transparent 62%),
-    radial-gradient(900px 650px at 108% 6%, rgba(219, 39, 119, 0.32), transparent 58%),
-    radial-gradient(1000px 750px at 52% 118%, rgba(2, 132, 199, 0.36), transparent 60%),
-    linear-gradient(135deg, #07070b 0%, #17123a 50%, #06283d 100%);
-  background-attachment: fixed;
-}
-html.glass[data-bg='plain'] body {
-  background: #eef1f7;
-}
-html.glass.dark[data-bg='plain'] body {
-  background: #0b0b0f;
-}
-
-/* 半透明面板 + 背景模糊（iOS 强模糊） */
-html.glass .bg-white {
-  background-color: var(--glass-panel) !important;
-  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
-  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
-}
-html.glass.dark .dark\:bg-zinc-900 {
-  background-color: rgba(20, 20, 26, 0.42) !important;
-  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
-  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
-}
-html.glass.dark .dark\:bg-zinc-950 {
-  background-color: rgba(8, 8, 12, 0.36) !important;
-  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
-  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
-}
-html.glass .bg-zinc-50 {
-  background-color: rgba(255, 255, 255, 0.38) !important;
-  backdrop-filter: blur(calc(var(--glass-blur) * 0.6));
-  -webkit-backdrop-filter: blur(calc(var(--glass-blur) * 0.6));
-}
-html.glass .bg-zinc-100 {
-  background-color: rgba(255, 255, 255, 0.5) !important;
-}
-html.glass.dark .dark\:bg-zinc-800,
-html.glass.dark .dark\:bg-zinc-800\/60 {
-  background-color: rgba(39, 39, 46, 0.55) !important;
-}
-
-/* 玻璃卡片：强模糊 + 内高光 + 柔和投影 + 亮边（iOS 层次感） */
-html.glass .rounded-xl,
-html.glass .rounded-2xl {
-  border: 1px solid var(--glass-border) !important;
-  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
-  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
-  box-shadow:
-    inset 0 1.5px 0 var(--glass-hi),
-    inset 0 -1px 0 rgba(255, 255, 255, 0.2),
-    inset 1px 0 0 rgba(255, 255, 255, 0.16),
-    0 16px 40px rgba(15, 23, 42, 0.18) !important;
-}
-html.glass.dark .rounded-xl,
-html.glass.dark .rounded-2xl {
-  border-color: rgba(255, 255, 255, 0.18) !important;
-  box-shadow:
-    inset 0 1.5px 0 rgba(255, 255, 255, 0.22),
-    inset 0 -1px 0 rgba(255, 255, 255, 0.06),
-    0 18px 44px rgba(0, 0, 0, 0.55) !important;
-}
-
-/* 输入框/按钮玻璃化（textarea 除外：它嵌在输入卡片里，必须保持透明） */
-html.glass input,
-html.glass select {
-  background-color: rgba(255, 255, 255, 0.38) !important;
-  border-color: var(--glass-border) !important;
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
-}
-html.glass.dark input,
-html.glass.dark select {
-  background-color: rgba(30, 30, 36, 0.45) !important;
-  border-color: rgba(255, 255, 255, 0.14) !important;
-}
-html.glass textarea,
-html.glass.dark textarea {
-  background-color: transparent !important;
-  border-color: transparent !important;
-  backdrop-filter: none !important;
-  -webkit-backdrop-filter: none !important;
-}
-html.glass button {
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-}
-
-/* 分隔线淡化 */
-html.glass .border-zinc-200 {
-  border-color: var(--glass-border) !important;
-}
-html.glass.dark .dark\:border-zinc-800 {
-  border-color: rgba(255, 255, 255, 0.12) !important;
-}
 
 /* 大圆角 */
 html.radius-lg .rounded-lg { border-radius: 0.875rem !important; }

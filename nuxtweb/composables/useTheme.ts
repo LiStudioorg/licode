@@ -1,15 +1,12 @@
 export type ThemeMode = 'light' | 'dark'
-export type ThemeSkin = 'default' | 'glass'
-export type GlassLevel = 'soft' | 'medium' | 'strong'
-export type BgStyle = 'gradient' | 'plain'
 export type RadiusStyle = 'normal' | 'large'
 
 const KEY = 'licode_theme'
-const SKIN_KEY = 'licode_skin'
-const GLASS_KEY = 'licode_glass'
-const BG_KEY = 'licode_bg'
 const RADIUS_KEY = 'licode_radius'
 const ANIM_KEY = 'licode_anim'
+const ACCENT_KEY = 'licode_accent'
+const APP_BG_KEY = 'licode_app_bg'
+const BUBBLE_KEY = 'licode_bubble'
 
 function read<T extends string>(key: string, allowed: readonly T[], fallback: T): T {
   if (!import.meta.client) return fallback
@@ -17,43 +14,25 @@ function read<T extends string>(key: string, allowed: readonly T[], fallback: T)
   return v && allowed.includes(v) ? v : fallback
 }
 
+function readColor(key: string, fallback: string): string {
+  if (!import.meta.client) return fallback
+  const v = localStorage.getItem(key)
+  return v && /^#[0-9a-fA-F]{6}$/.test(v) ? v : fallback
+}
+
 export function useTheme() {
   const mode = useState<ThemeMode>('theme', () => 'light')
-  const skin = useState<ThemeSkin>('themeSkin', () => 'default')
-  const glassLevel = useState<GlassLevel>('themeGlass', () => 'medium')
-  const bgStyle = useState<BgStyle>('themeBg', () => 'gradient')
   const radius = useState<RadiusStyle>('themeRadius', () => 'normal')
   const anim = useState<boolean>('themeAnim', () => true)
+  const accent = useState<string>('themeAccent', () => '#6366f1')
+  const appBg = useState<string>('themeAppBg', () => '#f4f4f5')
+  const bubble = useState<string>('themeBubble', () => '#18181b')
 
   function applyMode(m: ThemeMode) {
     mode.value = m
     if (import.meta.client) {
       document.documentElement.classList.toggle('dark', m === 'dark')
       localStorage.setItem(KEY, m)
-    }
-  }
-
-  function applySkin(s: ThemeSkin) {
-    skin.value = s
-    if (import.meta.client) {
-      document.documentElement.classList.toggle('glass', s === 'glass')
-      localStorage.setItem(SKIN_KEY, s)
-    }
-  }
-
-  function applyGlassLevel(v: GlassLevel) {
-    glassLevel.value = v
-    if (import.meta.client) {
-      document.documentElement.dataset.glass = v
-      localStorage.setItem(GLASS_KEY, v)
-    }
-  }
-
-  function applyBg(v: BgStyle) {
-    bgStyle.value = v
-    if (import.meta.client) {
-      document.documentElement.dataset.bg = v
-      localStorage.setItem(BG_KEY, v)
     }
   }
 
@@ -73,15 +52,39 @@ export function useTheme() {
     }
   }
 
+  function applyAccent(v: string) {
+    accent.value = v
+    if (import.meta.client) {
+      document.documentElement.style.setProperty('--accent', v)
+      localStorage.setItem(ACCENT_KEY, v)
+    }
+  }
+
+  function applyAppBg(v: string) {
+    appBg.value = v
+    if (import.meta.client) {
+      document.documentElement.style.setProperty('--app-bg', v)
+      localStorage.setItem(APP_BG_KEY, v)
+    }
+  }
+
+  function applyBubble(v: string) {
+    bubble.value = v
+    if (import.meta.client) {
+      document.documentElement.style.setProperty('--bubble', v)
+      localStorage.setItem(BUBBLE_KEY, v)
+    }
+  }
+
   function initTheme() {
     if (!import.meta.client) return
     const saved = localStorage.getItem(KEY) as ThemeMode | null
     applyMode(saved === 'dark' ? 'dark' : 'light')
-    applySkin(read<ThemeSkin>(SKIN_KEY, ['default', 'glass'], 'default'))
-    applyGlassLevel(read<GlassLevel>(GLASS_KEY, ['soft', 'medium', 'strong'], 'medium'))
-    applyBg(read<BgStyle>(BG_KEY, ['gradient', 'plain'], 'gradient'))
     applyRadius(read<RadiusStyle>(RADIUS_KEY, ['normal', 'large'], 'normal'))
     applyAnim(localStorage.getItem(ANIM_KEY) !== '0')
+    applyAccent(readColor(ACCENT_KEY, '#6366f1'))
+    applyAppBg(readColor(APP_BG_KEY, '#f4f4f5'))
+    applyBubble(readColor(BUBBLE_KEY, '#18181b'))
   }
 
   function toggleTheme() {
@@ -90,18 +93,18 @@ export function useTheme() {
 
   return {
     mode,
-    skin,
-    glassLevel,
-    bgStyle,
     radius,
     anim,
+    accent,
+    appBg,
+    bubble,
     initTheme,
     toggleTheme,
     setMode: applyMode,
-    setSkin: applySkin,
-    setGlassLevel: applyGlassLevel,
-    setBgStyle: applyBg,
     setRadius: applyRadius,
     setAnim: applyAnim,
+    setAccent: applyAccent,
+    setAppBg: applyAppBg,
+    setBubble: applyBubble,
   }
 }
