@@ -42,8 +42,6 @@ const (
 	EvtError     = "error"
 	EvtStatus    = "status"
 	EvtReasoning = "reasoning"
-	// EvtPluginOutput 插件斜杠命令的输出（content 为文本）。
-	EvtPluginOutput = "plugin_output"
 	EvtSettings  = "settings"
 	EvtAsk       = "ask"
 	EvtSessions  = "sessions"
@@ -91,12 +89,12 @@ type ClientMessage struct {
 	System   string `json:"system,omitempty"`
 	Settings any    `json:"settings,omitempty"`
 	// AskReply 对应 AskID 的确认结果。
-	AskID      string `json:"askId,omitempty"`
-	AskApprove bool   `json:"askApprove,omitempty"`
-	AskAlways  bool   `json:"askAlways,omitempty"`
-	SessionID    string        `json:"sessionId,omitempty"`
-	Index        int           `json:"index,omitempty"` // {session_branch} 分支点消息序号
-	Attachments  []Attachment  `json:"attachments,omitempty"`
+	AskID       string       `json:"askId,omitempty"`
+	AskApprove  bool         `json:"askApprove,omitempty"`
+	AskAlways   bool         `json:"askAlways,omitempty"`
+	SessionID   string       `json:"sessionId,omitempty"`
+	Index       int          `json:"index,omitempty"` // {session_branch} 分支点消息序号
+	Attachments []Attachment `json:"attachments,omitempty"`
 }
 
 // Attachment 是多模态附件（图片/文件），base64 编码。

@@ -69,33 +69,13 @@ const slashCommands = [
   { key: '/interrupt', label: '停止生成', desc: '中断当前正在进行的回复', icon: Square, action: () => licode.interrupt() },
 ]
 
-// 插件贡献的斜杠命令（/name，参数直接跟在后面）
-const pluginCommands = ref<{ key: string; label: string; desc: string }[]>([])
-
-onMounted(async () => {
-  try {
-    const d = await useApi<{ plugins?: any[] }>('/api/plugins')
-    pluginCommands.value = (d.plugins || [])
-      .filter((p) => p.running)
-      .flatMap((p) =>
-        (p.commands || []).map((c: any) => ({
-          key: '/' + c.name,
-          label: c.name,
-          desc: (p.name || p.id) + '：' + (c.description || '插件命令'),
-        })),
-      )
-  } catch {}
-})
-
 const filteredCommands = computed(() => {
   const text = input.value.trim().toLowerCase()
   if (!text.startsWith('/')) return []
   const query = text.slice(1)
-  const builtin = slashCommands
+  return slashCommands
     .filter((c) => c.key.includes(query) || c.label.includes(query))
     .map((c) => ({ ...c }))
-  const plugins = pluginCommands.value.filter((c) => c.key.includes(query) || c.label.includes(query))
-  return [...builtin, ...plugins]
 })
 
 function onInput() {
@@ -139,12 +119,7 @@ function selectCommand(cmd: any) {
     cmd.action()
     input.value = ''
     showSlashMenu.value = false
-    return
   }
-  // 插件命令：填入命令前缀，让用户补参数后发送
-  input.value = cmd.key + ' '
-  showSlashMenu.value = false
-  nextTick(() => taRef.value?.focus())
 }
 
 function autoGrow() {

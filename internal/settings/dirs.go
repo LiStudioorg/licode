@@ -31,24 +31,15 @@ func SubDir(name string) string {
 	return filepath.Join(BaseDir(), name)
 }
 
-func ConfigPath() string  { return filepath.Join(BaseDir(), "config.json") }
+func ConfigPath() string     { return filepath.Join(BaseDir(), "config.json") }
 func ConfigTOMLPath() string { return filepath.Join(BaseDir(), "config.toml") }
-func SkillsDir() string   { return filepath.Join(BaseDir(), "skills") }
-func MCPDir() string      { return filepath.Join(BaseDir(), "mcp") }
-func SessionsDir() string { return filepath.Join(BaseDir(), "sessions") }
-func LogsDir() string     { return filepath.Join(BaseDir(), "logs") }
-func CacheDir() string    { return filepath.Join(BaseDir(), "cache") }
-func MDPromptDir() string { return filepath.Join(BaseDir(), "md") }
-func ToolsDir() string    { return filepath.Join(BaseDir(), "tools") }
-
-// PluginsDir 用户级插件目录；PluginsStatePath 插件启停/权限/设置状态。
-func PluginsDir() string       { return filepath.Join(BaseDir(), "plugins") }
-func PluginsStatePath() string { return filepath.Join(BaseDir(), "plugins.state.json") }
-
-// PluginDirs 返回插件加载目录（用户级 + 项目级）。
-func PluginDirs() []string {
-	return []string{PluginsDir(), filepath.Join(".licode", "plugins")}
-}
+func SkillsDir() string      { return filepath.Join(BaseDir(), "skills") }
+func MCPDir() string         { return filepath.Join(BaseDir(), "mcp") }
+func SessionsDir() string    { return filepath.Join(BaseDir(), "sessions") }
+func LogsDir() string        { return filepath.Join(BaseDir(), "logs") }
+func CacheDir() string       { return filepath.Join(BaseDir(), "cache") }
+func MDPromptDir() string    { return filepath.Join(BaseDir(), "md") }
+func ToolsDir() string       { return filepath.Join(BaseDir(), "tools") }
 
 // SystemPromptPath 系统提示词文件（可直接编辑生效）。
 func SystemPromptPath() string { return filepath.Join(BaseDir(), "system-prompt.md") }

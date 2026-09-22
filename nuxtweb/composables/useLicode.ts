@@ -172,6 +172,60 @@ function createStore() {
   let blockId = 0
   let msgId = 0
   let lastToolKey = ''
+  // busy 按会话隔离：A 对话处理中时 B 仍可发消息；state.busy 只反映当前会话。
+  const busyBySession: Record<string, boolean> = {}
+  const askBySession: Record<string, AskInfo> = {}
+  const reasoningBySession: Record<string, string> = {}
+  const statusBySession: Record<string, string> = {}
+
+  function evtSessionId(evt: any): string {
+    return String(evt.sessionId ?? '')
+  }
+
+  function isForCurrentSession(evt: any): boolean {
+    const sid = evtSessionId(evt)
+    return !sid || sid === state.sessionId
+  }
+
+  function setSessionBusy(id: string, v: boolean) {
+    if (!id) return
+    if (v) busyBySession[id] = true
+    else delete busyBySession[id]
+    if (id === state.sessionId) {
+      state.busy = v
+      if (!v) {
+        state.statusText = ''
+        delete statusBySession[id]
+        delete reasoningBySession[id]
+        state.reasoning = ''
+      }
+    }
+  }
+
+  function clearSessionRuntime(id: string) {
+    if (!id) return
+    delete busyBySession[id]
+    delete askBySession[id]
+    delete reasoningBySession[id]
+    delete statusBySession[id]
+    if (id === state.sessionId) {
+      state.busy = false
+      state.ask = null
+      state.reasoning = ''
+      state.statusText = ''
+    }
+  }
+
+  function syncBusyFromSession(id: string) {
+    state.busy = !!busyBySession[id]
+    state.reasoning = reasoningBySession[id] ?? ''
+    state.statusText = statusBySession[id] ?? ''
+    state.ask = askBySession[id] ?? null
+    if (!state.busy) {
+      state.statusText = ''
+      delete statusBySession[id]
+    }
+  }
 
   function send(type: string, payload: Record<string, any> = {}) {
     if (ws && ws.readyState === WebSocket.OPEN) {
@@ -217,7 +271,14 @@ function createStore() {
     }
     ws.onclose = () => {
       state.wsStatus = 'disconnected'
+      for (const id of Object.keys(busyBySession)) delete busyBySession[id]
+      for (const id of Object.keys(askBySession)) delete askBySession[id]
+      for (const id of Object.keys(reasoningBySession)) delete reasoningBySession[id]
+      for (const id of Object.keys(statusBySession)) delete statusBySession[id]
       state.busy = false
+      state.statusText = ''
+      state.reasoning = ''
+      state.ask = null
       scheduleReconnect()
     }
   }
@@ -289,9 +350,11 @@ function createStore() {
   function handleEvent(evt: any) {
     switch (evt.type) {
       case 'delta':
+        if (!isForCurrentSession(evt)) break
         appendText(ensureAssistant(), String(evt.content ?? ''))
         break
       case 'tool_start': {
+        if (!isForCurrentSession(evt)) break
         const msg = ensureAssistant()
         msg.blocks.push({
           kind: 'tool',
@@ -305,6 +368,7 @@ function createStore() {
         break
       }
       case 'tool_done': {
+        if (!isForCurrentSession(evt)) break
         const msg = state.messages[state.messages.length - 1]
         if (!msg) break
         for (let i = msg.blocks.length - 1; i >= 0; i--) {
@@ -317,59 +381,60 @@ function createStore() {
         }
         break
       }
-      case 'plugin_output': {
-        // 插件斜杠命令输出：作为一条独立的助手消息展示（不经过 LLM）
-        const text = String(evt.content ?? '')
-        if (text) {
-          state.messages.push({
-            id: ++msgId,
-            role: 'assistant',
-            blocks: [{ kind: 'text', id: ++blockId, text }],
-          })
-        }
-        state.busy = false
-        state.statusText = ''
+      case 'reasoning': {
+        const sid = evtSessionId(evt)
+        const chunk = String(evt.content ?? '')
+        if (sid) reasoningBySession[sid] = (reasoningBySession[sid] ?? '') + chunk
+        if (isForCurrentSession(evt)) state.reasoning += chunk
         break
       }
-      case 'reasoning':
-        // 模型思考过程（DeepSeek/Claude/Gemini 等），只展示不持久化
-        state.reasoning += String(evt.content ?? '')
+      case 'status': {
+        const sid = evtSessionId(evt)
+        const text = String(evt.content ?? '')
+        if (sid) statusBySession[sid] = text
+        if (isForCurrentSession(evt)) state.statusText = text
         break
-      case 'status':
-        state.statusText = String(evt.content ?? '')
-        break
-      case 'done':
-        state.busy = false
-        state.statusText = ''
+      }
+      case 'done': {
+        const sid = evtSessionId(evt)
+        clearSessionRuntime(sid || state.sessionId)
         send('sessions_get')
         break
-      case 'error':
-        state.busy = false
-        state.statusText = ''
-        Message.error(String(evt.error ?? '发生错误'))
+      }
+      case 'error': {
+        const sid = evtSessionId(evt)
+        const errText = String(evt.error ?? '发生错误')
+        clearSessionRuntime(sid || state.sessionId)
+        // 只弹当前会话的错误，避免后台会话报错打断操作
+        if (isForCurrentSession(evt)) Message.error(errText)
         break
-      case 'ask':
-        state.ask = {
+      }
+      case 'ask': {
+        const sid = evtSessionId(evt)
+        const info: AskInfo = {
           askId: String(evt.askId ?? ''),
           toolName: String(evt.toolName ?? ''),
           toolArgs: String(evt.toolArgs ?? ''),
         }
+        if (sid) askBySession[sid] = info
+        if (isForCurrentSession(evt)) state.ask = info
         break
+      }
       case 'settings':
         state.settings = (evt.settings ?? null) as Settings | null
         break
       case 'sessions':
         state.sessions = (evt.sessions ?? []) as SessionInfo[]
         state.sessionId = String(evt.sessionId ?? '')
+        syncBusyFromSession(state.sessionId)
         if (state.sessionId) send('session_history', { sessionId: state.sessionId })
         break
       case 'history': {
         // 只应用当前会话的历史，避免切换期间旧响应覆盖新视图。
         if (String(evt.sessionId ?? '') !== state.sessionId) break
+        // 后台仍在跑的会话：保留 busy/ask，只重建消息列表
         state.messages = historyToMessages(Array.isArray(evt.messages) ? evt.messages : [])
-        state.busy = false
-        state.statusText = ''
-        state.ask = null
+        syncBusyFromSession(state.sessionId)
         break
       }
       case 'stats':
@@ -391,6 +456,9 @@ function createStore() {
       state.statusText = ''
       state.reasoning = ''
       state.ask = null
+      delete reasoningBySession[state.sessionId]
+      delete statusBySession[state.sessionId]
+      delete askBySession[state.sessionId]
       send('message', { content: text })
       return
     }
@@ -401,9 +469,10 @@ function createStore() {
       attachments: attachments?.map((a) => ({ type: a.type, mime_type: a.mimeType, data: '', filename: a.filename, url: a.url })),
     })
     ensureAssistant()
-    state.busy = true
+    setSessionBusy(state.sessionId, true)
     state.reasoning = ''
     state.statusText = '思考中…'
+    if (state.sessionId) statusBySession[state.sessionId] = state.statusText
     send('message', {
       content: text,
       attachments: attachments?.map((a) => ({ type: a.type, mime_type: a.mimeType, data: a.data, filename: a.filename })),
@@ -421,6 +490,7 @@ function createStore() {
       askApprove: approve,
       askAlways: always,
     })
+    delete askBySession[state.sessionId]
     state.ask = null
   }
 
@@ -433,6 +503,8 @@ function createStore() {
     if (id === state.sessionId) return
     send('session_switch', { sessionId: id })
     state.messages = []
+    // 切换时立刻反映目标会话的 busy，不等 sessions 回包
+    syncBusyFromSession(id)
   }
 
   function renameSession(id: string, title: string) {

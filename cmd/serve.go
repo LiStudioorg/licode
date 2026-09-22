@@ -25,7 +25,6 @@ import (
 
 	"licode/internal/agent"
 	"licode/internal/ai"
-	"licode/internal/plugin"
 	"licode/internal/rag"
 	"licode/internal/session"
 	"licode/internal/settings"
@@ -138,27 +137,30 @@ type serverState struct {
 	mu           sync.RWMutex
 	settings     settings.Settings
 	client       ai.LLMClient
-	shuttingDown bool           // 收到关停信号后置位，拒绝新连接
-	rag          *rag.Index     // 特性5：项目源码轻量 RAG 索引（懒构建）
-	plugins      *plugin.Manager // 进程插件管理器
+	shuttingDown bool       // 收到关停信号后置位，拒绝新连接
+	rag          *rag.Index // 特性5：项目源码轻量 RAG 索引（懒构建）
 }
 
 // connState 保存每个连接独立的会话（多对话）与待确认的工具调用。
+// busy/interruptCancel 按会话 ID 独立跟踪：同一连接下多个会话可并行处理，
+// 切换会话后发消息不会被其他会话的运行状态误锁。
 type connState struct {
 	mu              sync.Mutex
 	sessions        *session.Manager
 	pending         map[string]chan bool
 	askTool         map[string]string // askID -> 工具名
 	askSeq          atomic.Int64
-	busy            bool
-	interruptCancel context.CancelFunc
+	busy            map[string]bool               // sessionID -> 是否处理中
+	interruptCancel map[string]context.CancelFunc // sessionID -> 可取消的运行上下文
 }
 
 func newConnState(sessionsDir string) *connState {
 	return &connState{
-		sessions: session.NewManager(sessionsDir, true),
-		pending:  map[string]chan bool{},
-		askTool:  map[string]string{},
+		sessions:        session.NewManager(sessionsDir, true),
+		pending:         map[string]chan bool{},
+		askTool:         map[string]string{},
+		busy:            map[string]bool{},
+		interruptCancel: map[string]context.CancelFunc{},
 	}
 }
 
@@ -183,13 +185,6 @@ func runServe(opts *ServeOptions) error {
 	}
 
 	st := &serverState{}
-	st.plugins = plugin.NewManager(settings.PluginsStatePath(), settings.PluginDirs()...)
-	pluginCtx, pluginCancel := context.WithCancel(context.Background())
-	st.plugins.Start(pluginCtx)
-	defer func() {
-		pluginCancel()
-		st.plugins.Close()
-	}()
 	st.settings = settings.Defaults()
 	st.settings.ApplyFlags(opts.NoSubAgents)
 
@@ -302,24 +297,22 @@ func runServe(opts *ServeOptions) error {
 				}
 
 			case websocket.TypeMessage:
-				// 插件斜杠命令优先拦截（如 /hello arg）
-				if st.runPluginCommand(ctx, c, msg.Content) {
-					return
-				}
+				sessID := cs.sessions.CurrentID()
 				if msg.Content == "/clear" {
 					cs.sessions.Current().Clear()
-					c.SendEvent(websocket.ServerEvent{Type: websocket.EvtDone})
+					c.SendEvent(websocket.ServerEvent{Type: websocket.EvtDone, SessionID: sessID})
 					return
 				}
+				// busy 按会话隔离：A 对话处理中时，B 对话仍可并发跑 Agent。
 				cs.mu.Lock()
-				if cs.busy {
+				if cs.busy[sessID] {
 					cs.mu.Unlock()
-					c.SendEvent(websocket.ServerEvent{Type: websocket.EvtError, Error: "上一条消息仍在处理中，请稍候"})
+					c.SendEvent(websocket.ServerEvent{Type: websocket.EvtError, Error: "该对话上一条消息仍在处理中，请稍候", SessionID: sessID})
 					return
 				}
-				cs.busy = true
+				cs.busy[sessID] = true
 				msgCtx, msgCancel := context.WithCancel(ctx)
-				cs.interruptCancel = msgCancel
+				cs.interruptCancel[sessID] = msgCancel
 				cs.mu.Unlock()
 				atts := make([]ai.Attachment, 0, len(msg.Attachments))
 				for _, a := range msg.Attachments {
@@ -327,25 +320,28 @@ func runServe(opts *ServeOptions) error {
 				}
 				// Agent 在独立 goroutine 中运行：消息处理是串行的，若在这里同步执行，
 				// 停止/工具确认（interrupt/ask_reply）会排在队列里永远处理不到。
+				// sessID 在入队时固定，运行中切换 Current 不影响本次归属的会话。
 				go func() {
 					defer func() {
 						cs.mu.Lock()
-						cs.busy = false
-						cs.interruptCancel = nil
+						delete(cs.busy, sessID)
+						delete(cs.interruptCancel, sessID)
 						cs.mu.Unlock()
 						msgCancel()
 					}()
-					runServerAgentWithAttachments(msgCtx, st, cs, c, msg.Content, msg.System, atts)
+					runServerAgentWithAttachments(msgCtx, st, cs, c, sessID, msg.Content, msg.System, atts)
 					_ = cs.sessions.SaveAll()
 				}()
 
 			case websocket.TypeInterrupt:
+				// 只中断当前正在查看的会话；其它会话的并发运行不受影响。
+				sessID := cs.sessions.CurrentID()
 				cs.mu.Lock()
-				cancel := cs.interruptCancel
+				cancel := cs.interruptCancel[sessID]
 				cs.mu.Unlock()
 				if cancel != nil {
 					cancel()
-					c.SendEvent(websocket.ServerEvent{Type: websocket.EvtDone})
+					c.SendEvent(websocket.ServerEvent{Type: websocket.EvtDone, SessionID: sessID})
 				}
 			}
 		})
@@ -494,79 +490,6 @@ func runServe(opts *ServeOptions) error {
 			return
 		}
 		st.handleToolsDelete(w, r)
-	})
-	// 插件管理（设置页「插件」页签）
-	mux.HandleFunc("/api/plugins", func(w http.ResponseWriter, r *http.Request) {
-		if !auth.require(w, r) {
-			return
-		}
-		st.handlePluginsList(w, r)
-	})
-	mux.HandleFunc("/api/plugins/enable", func(w http.ResponseWriter, r *http.Request) {
-		if !auth.require(w, r) {
-			return
-		}
-		if r.Method != http.MethodPost {
-			writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "仅支持 POST"})
-			return
-		}
-		st.handlePluginsEnable(w, r)
-	})
-	mux.HandleFunc("/api/plugins/disable", func(w http.ResponseWriter, r *http.Request) {
-		if !auth.require(w, r) {
-			return
-		}
-		if r.Method != http.MethodPost {
-			writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "仅支持 POST"})
-			return
-		}
-		st.handlePluginsDisable(w, r)
-	})
-	mux.HandleFunc("/api/plugins/reload", func(w http.ResponseWriter, r *http.Request) {
-		if !auth.require(w, r) {
-			return
-		}
-		if r.Method != http.MethodPost {
-			writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "仅支持 POST"})
-			return
-		}
-		st.handlePluginsReload(w, r)
-	})
-	mux.HandleFunc("/api/plugins/settings", func(w http.ResponseWriter, r *http.Request) {
-		if !auth.require(w, r) {
-			return
-		}
-		if r.Method != http.MethodPost {
-			writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "仅支持 POST"})
-			return
-		}
-		st.handlePluginsSettings(w, r)
-	})
-	mux.HandleFunc("/api/plugins/install", func(w http.ResponseWriter, r *http.Request) {
-		if !auth.require(w, r) {
-			return
-		}
-		if r.Method != http.MethodPost {
-			writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "仅支持 POST"})
-			return
-		}
-		st.handlePluginsInstall(w, r)
-	})
-	mux.HandleFunc("/api/plugins/delete", func(w http.ResponseWriter, r *http.Request) {
-		if !auth.require(w, r) {
-			return
-		}
-		if r.Method != http.MethodPost {
-			writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "仅支持 POST"})
-			return
-		}
-		st.handlePluginsDelete(w, r)
-	})
-	mux.HandleFunc("/api/plugins/panel", func(w http.ResponseWriter, r *http.Request) {
-		if !auth.require(w, r) {
-			return
-		}
-		st.handlePluginsPanel(w, r)
 	})
 	mux.HandleFunc("/api/version", func(w http.ResponseWriter, r *http.Request) {
 		if !auth.require(w, r) {
@@ -769,9 +692,8 @@ func runServe(opts *ServeOptions) error {
 		defer cancel()
 		// 等待当前 HTTP/WebSocket 请求（含正在运行的 DAG 子代理与 Shell 脚本）自然完成或超时
 		_ = srv.Shutdown(ctx)
-		// 关闭 MCP 子进程与插件进程，避免资源泄漏/数据损坏
+		// 关闭 MCP 子进程，避免资源泄漏/数据损坏
 		agent.CloseMCPClients()
-		st.plugins.Close()
 		log.Printf("已停止")
 	}()
 
@@ -844,57 +766,24 @@ func reloadServerSettings(st *serverState) error {
 	return nil
 }
 
-// registerPluginTools 把运行中插件贡献的工具/提示词/钩子装进本次 Agent。
-func registerPluginTools(ag *agent.Agent, mgr *plugin.Manager) {
-	if mgr == nil {
-		return
-	}
-	for _, p := range mgr.Running() {
-		man := p.Manifest
-		if man.Prompt != "" {
-			ag.System += "\n\n" + man.Prompt
-		}
-		for _, t := range man.Contributes.Tools {
-			pp, tt := p, t
-			name := man.ToolName(tt.Name)
-			desc := tt.Description
-			if desc == "" {
-				desc = tt.Name
-			}
-			_ = ag.Tools.Register(agent.Tool{
-				Name:        name,
-				Description: "插件「" + man.Name + "」：" + desc,
-				Schema:      tt.Schema,
-				Run: func(ctx context.Context, args map[string]any) (string, error) {
-					return pp.CallTool(ctx, tt.Name, args)
-				},
-			})
-		}
-	}
-	if len(mgr.Running()) > 0 {
-		ag.OnUserMessage = func(ctx context.Context, content string) (string, error) {
-			return mgr.HookUserMessage(ctx, content), nil
-		}
-		ag.OnBeforeTool = mgr.HookBeforeTool
-		ag.OnAfterTool = mgr.HookAfterTool
-		ag.OnDone = mgr.HookDone
-	}
-}
-
-// runServerAgentWithAttachments 在当前设置下运行一次 Agent，支持附件。
-func runServerAgentWithAttachments(ctx context.Context, st *serverState, cs *connState, c *websocket.Client, content, roleSystem string, attachments []ai.Attachment) {
+// runServerAgentWithAttachments 在指定会话下运行一次 Agent，支持附件。
+// sessID 在消息入队时固定，与连接的 Current 解耦，避免并发会话串台。
+func runServerAgentWithAttachments(ctx context.Context, st *serverState, cs *connState, c *websocket.Client, sessID, content, roleSystem string, attachments []ai.Attachment) {
 	st.mu.RLock()
 	s := st.settings.Snapshot()
 	client := st.client
 	st.mu.RUnlock()
 
-	sess := cs.sessions.Current()
+	sess, ok := cs.sessions.Get(sessID)
+	if !ok {
+		c.SendEvent(websocket.ServerEvent{Type: websocket.EvtError, Error: "会话不存在", SessionID: sessID})
+		return
+	}
 	if s.TitleGen && sess.Title() == "新对话" {
 		sess.SetTitle(autoTitle(content))
 	}
 
 	ag := s.BuildAgent(client)
-	registerPluginTools(ag, st.plugins)
 	if roleSystem != "" {
 		ag.System = roleSystem + "\n" + ag.System
 	}
@@ -916,7 +805,7 @@ func runServerAgentWithAttachments(ctx context.Context, st *serverState, cs *con
 		cs.askTool[askID] = toolName
 		cs.mu.Unlock()
 		c.SendEvent(websocket.ServerEvent{
-			Type: websocket.EvtAsk, ToolName: toolName, ToolArgs: args, AskID: askID,
+			Type: websocket.EvtAsk, ToolName: toolName, ToolArgs: args, AskID: askID, SessionID: sessID,
 		})
 		select {
 		case ok := <-ch:
@@ -945,26 +834,26 @@ func runServerAgentWithAttachments(ctx context.Context, st *serverState, cs *con
 		if e.Type == agent.EventText && !stream {
 			textBuf.WriteString(e.Content)
 		} else if e.Type == agent.EventText {
-			c.SendEvent(websocket.ServerEvent{Type: websocket.EvtDelta, Content: e.Content})
+			c.SendEvent(websocket.ServerEvent{Type: websocket.EvtDelta, Content: e.Content, SessionID: sessID})
 		} else if e.Type == agent.EventToolStart {
 			c.SendEvent(websocket.ServerEvent{
-				Type: websocket.EvtToolStart, ToolName: e.ToolName, ToolArgs: e.ToolArgs,
+				Type: websocket.EvtToolStart, ToolName: e.ToolName, ToolArgs: e.ToolArgs, SessionID: sessID,
 			})
 		} else if e.Type == agent.EventToolDone {
 			c.SendEvent(websocket.ServerEvent{
-				Type: websocket.EvtToolDone, ToolName: e.ToolName, ToolOut: e.ToolOut,
+				Type: websocket.EvtToolDone, ToolName: e.ToolName, ToolOut: e.ToolOut, SessionID: sessID,
 			})
 		} else if e.Type == agent.EventDone {
 			if !stream && textBuf.Len() > 0 {
-				c.SendEvent(websocket.ServerEvent{Type: websocket.EvtDelta, Content: textBuf.String()})
+				c.SendEvent(websocket.ServerEvent{Type: websocket.EvtDelta, Content: textBuf.String(), SessionID: sessID})
 			}
-			c.SendEvent(websocket.ServerEvent{Type: websocket.EvtDone})
+			c.SendEvent(websocket.ServerEvent{Type: websocket.EvtDone, SessionID: sessID})
 		} else if e.Type == agent.EventError {
-			c.SendEvent(websocket.ServerEvent{Type: websocket.EvtError, Error: e.Error})
+			c.SendEvent(websocket.ServerEvent{Type: websocket.EvtError, Error: e.Error, SessionID: sessID})
 		} else if e.Type == agent.EventReasoning {
-			c.SendEvent(websocket.ServerEvent{Type: websocket.EvtReasoning, Content: e.Content})
+			c.SendEvent(websocket.ServerEvent{Type: websocket.EvtReasoning, Content: e.Content, SessionID: sessID})
 		} else if e.Type == agent.EventStatus {
-			c.SendEvent(websocket.ServerEvent{Type: websocket.EvtStatus, Content: e.Content})
+			c.SendEvent(websocket.ServerEvent{Type: websocket.EvtStatus, Content: e.Content, SessionID: sessID})
 		}
 		return nil
 	})

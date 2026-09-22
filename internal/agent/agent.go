@@ -306,14 +306,6 @@ type Agent struct {
 	// AutoAllowPaths 允许工具访问工作目录之外路径时不再逐次询问
 	// （信任该设置的用户显式开启；默认关闭，外部路径仍需逐次确认）。
 	AutoAllowPaths bool
-	// OnUserMessage 允许外部（插件）改写用户消息。
-	OnUserMessage func(ctx context.Context, content string) (string, error)
-	// OnBeforeTool 工具执行前钩子：返回 false 拒绝执行，第二值可改写参数。
-	OnBeforeTool func(ctx context.Context, tool, args string) (bool, string)
-	// OnAfterTool 工具执行后钩子：可改写输出。
-	OnAfterTool func(ctx context.Context, tool, args, out string) string
-	// OnDone 一轮回复完成后的通知。
-	OnDone func(ctx context.Context)
 	// Compaction 上下文超限时用 LLM 压缩旧对话。
 	Compaction bool
 	// RedactSecrets 对工具输出做敏感信息脱敏。
@@ -379,11 +371,6 @@ func (a *Agent) RunWithAttachments(ctx context.Context, input string, attachment
 		defer cancel()
 	}
 	logx.AgentStart(a.TraceID, a.Name)
-	if a.OnUserMessage != nil {
-		if next, err := a.OnUserMessage(ctx, input); err == nil && next != "" {
-			input = next
-		}
-	}
 	a.Session.Add(ai.Message{Role: ai.RoleUser, Content: input, Attachments: attachments})
 
 	var asst ai.Message
@@ -442,9 +429,6 @@ func (a *Agent) RunWithAttachments(ctx context.Context, input string, attachment
 		a.Session.Add(asst)
 
 		if len(asst.ToolCalls) == 0 {
-			if a.OnDone != nil {
-				a.OnDone(ctx)
-			}
 			onEvent(Event{Type: EventDone})
 			return nil
 		}
@@ -461,9 +445,6 @@ func (a *Agent) RunWithAttachments(ctx context.Context, input string, attachment
 			}
 			if a.RedactSecrets {
 				out = RedactSecrets(out)
-			}
-			if a.OnAfterTool != nil {
-				out = a.OnAfterTool(ctx, tc.Function.Name, tc.Function.Arguments, out)
 			}
 			args := tc.Function.Arguments
 			if a.RedactSecrets {
@@ -526,19 +507,6 @@ func (a *Agent) runTool(ctx context.Context, tc ai.ToolCall, onEvent func(Event)
 		max = a.ToolRetryMax
 		if max <= 0 {
 			max = 3
-		}
-	}
-	if a.OnBeforeTool != nil {
-		allow, nextArgs := a.OnBeforeTool(ctx, tc.Function.Name, tc.Function.Arguments)
-		if !allow {
-			reason := nextArgs
-			if reason == "" {
-				reason = "插件拒绝了该工具调用"
-			}
-			return reason, nil
-		}
-		if nextArgs != "" {
-			tc.Function.Arguments = nextArgs
 		}
 	}
 	// 注入工作目录之外路径的人工确认钩子：工具访问外部路径时先问用户。

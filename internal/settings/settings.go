@@ -24,15 +24,15 @@ var ProviderChoices = []string{"openai", "claude", "ollama", "gemini"}
 
 // ProviderConfig 描述一个已配置的厂商条目（可自定义名称与协议类型）。
 type ProviderConfig struct {
-	Provider string   `json:"provider"` // 标识（内置名或自定义）
-	Name     string   `json:"name"`     // 自定义显示名称
-	Type     string   `json:"type"`     // 协议类型：openai/claude/ollama/gemini；空按 Provider 推断
-	BaseURL  string   `json:"base_url"`
-	APIKey   string   `json:"api_key"`
-	Model    string   `json:"model"`            // 当前使用的模型
-	Models   []string `json:"models,omitempty"` // 该厂商的模型列表（可自由增删，仅作展示/选择用）
-	HostIP      string `json:"host_ip,omitempty"`    // 指定 IP：该厂商 base_url 域名直接连此 IP（SNI/证书校验仍用原域名），绕过 DNS 劫持
-	InsecureSSL bool   `json:"insecure_ssl,omitempty"` // 忽略 TLS 证书校验（仅限自签名证书等受控场景）
+	Provider    string   `json:"provider"` // 标识（内置名或自定义）
+	Name        string   `json:"name"`     // 自定义显示名称
+	Type        string   `json:"type"`     // 协议类型：openai/claude/ollama/gemini；空按 Provider 推断
+	BaseURL     string   `json:"base_url"`
+	APIKey      string   `json:"api_key"`
+	Model       string   `json:"model"`                  // 当前使用的模型
+	Models      []string `json:"models,omitempty"`       // 该厂商的模型列表（可自由增删，仅作展示/选择用）
+	HostIP      string   `json:"host_ip,omitempty"`      // 指定 IP：该厂商 base_url 域名直接连此 IP（SNI/证书校验仍用原域名），绕过 DNS 劫持
+	InsecureSSL bool     `json:"insecure_ssl,omitempty"` // 忽略 TLS 证书校验（仅限自签名证书等受控场景）
 }
 
 // AddModel 把模型追加进列表（去重），供激活与导入时保持一致性。
@@ -305,7 +305,7 @@ func (s *Settings) BuildAgent(client ai.LLMClient) *agent.Agent {
 	ag.ToolAutoRetry = s.ToolAutoRetry
 	ag.ToolRetryMax = s.ToolRetryMax
 	ag.Shell = agent.ShellConfig{Path: s.ShellPath}
-	// 安全默认：未知工具（MCP、外部热加载命令、WASM 插件）一律先 "ask"，
+	// 安全默认：未知工具（MCP、外部热加载命令等）一律先 "ask"，
 	// 只读工具显式放行，高风险工具强制 "ask"。防止未配置任何工具规则时
 	// 模型经提示注入通过 MCP/外部工具自主执行任意操作。
 	ag.Permissions["*"] = "ask"
