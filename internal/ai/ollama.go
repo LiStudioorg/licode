@@ -120,7 +120,7 @@ func (p *OllamaProvider) buildBody(req ChatRequest) ([]byte, error) {
 	}
 	body := ollamaReq{Model: req.Model, Messages: msgs, Stream: true, Tools: tools}
 	if req.Temperature != 0 {
-		body.Options = map[string]any{"temperature": req.Temperature}
+		body.Options = map[string]any{"temperature": normalizeTemperature(req.Model, req.Temperature)}
 	}
 	return json.Marshal(body)
 }

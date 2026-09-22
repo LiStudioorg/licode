@@ -15,39 +15,57 @@ const dragOver = ref(false)
 const showSlashMenu = ref(false)
 const slashMenuIndex = ref(0)
 
-// 模型选择：厂商 + 当前厂商可用模型，位于输入框上方。
+// 模型选择：按厂商分组的紧凑短框（位于发送键前）。
 const providerOptions = computed(() =>
   (state.settings?.providers || []).map((p) => ({ label: p.name || p.provider, value: p.provider })),
 )
-const modelOptions = computed(() => {
+const modelGroups = computed(() => {
   const s = state.settings
-  const p = (s?.providers || []).find((x) => x.provider === s?.provider)
-  if (!p) return s?.model ? [{ label: s.model, value: s.model }] : []
-  const set = new Set<string>(p.models || [])
-  if (p.model) set.add(p.model)
-  return [...set].map((m) => ({ label: m, value: m }))
+  const list = s?.providers || []
+  return list.map((p) => {
+    const set = new Set<string>(p.models || [])
+    if (p.model) set.add(p.model)
+    return {
+      label: p.name || p.provider,
+      value: p.provider,
+      models: [...set].map((m) => ({ label: m, value: m })),
+    }
+  })
 })
+// 扁平化选项：厂商为分组头，模型缩进显示，供单个短 Select 使用。
+const modelPickOptions = computed(() => {
+  const s = state.settings
+  const out: { label: string; value: string }[] = []
+  for (const g of modelGroups.value) {
+    out.push({ label: `— ${g.label} —`, value: `__provider__${g.value}` })
+    for (const m of g.models) out.push({ label: `  ${m.label}`, value: m.value })
+  }
+  if (!out.length && s?.model) out.push({ label: s.model, value: s.model })
+  return out
+})
+const modelPickValue = computed(() => state.settings?.model || '')
 
-function switchProvider(v: string | number) {
+function pickModel(v: string | number) {
+  const val = String(v || '')
+  if (!val) return
   const s = state.settings
   if (!s) return
-  const p = (s.providers || []).find((x) => x.provider === String(v))
-  if (!p) return
-  licode.saveSettings({
-    ...s,
-    provider: p.provider,
-    base_url: p.base_url ?? '',
-    api_key: p.api_key ?? '',
-    model: p.model || s.model || '',
-  })
-  Message.success(`已切换厂商：${p.name || p.provider}`)
-}
-
-function switchModel(v: string | number) {
-  const s = state.settings
-  if (!s || !v) return
-  licode.saveSettings({ ...s, model: String(v) })
-  Message.success(`已切换模型：${v}`)
+  if (val.startsWith('__provider__')) {
+    const pid = val.slice('__provider__'.length)
+    const p = (s.providers || []).find((x) => x.provider === pid)
+    if (!p) return
+    licode.saveSettings({
+      ...s,
+      provider: p.provider,
+      base_url: p.base_url ?? '',
+      api_key: p.api_key ?? '',
+      model: p.model || s.model || '',
+    })
+    Message.success(`已切换厂商：${p.name || p.provider}`)
+    return
+  }
+  licode.saveSettings({ ...s, model: val })
+  Message.success(`已切换模型：${val}`)
 }
 
 const plusOptions = [
@@ -216,29 +234,6 @@ function doClear() {
 <template>
   <div class="shrink-0 px-4 pb-4">
       <div class="relative mx-auto w-full max-w-3xl">
-      <!-- 模型选择：位于输入框上方 -->
-      <div class="mb-2 flex min-w-0 flex-wrap items-center gap-2">
-        <Select
-          v-if="providerOptions.length"
-          :model-value="state.settings?.provider || ''"
-          :options="providerOptions"
-          size="sm"
-          class="w-40 shrink-0"
-          placeholder="选择厂商"
-          @update:model-value="switchProvider"
-        />
-        <Select
-          v-if="modelOptions.length"
-          :model-value="state.settings?.model || ''"
-          :options="modelOptions"
-          size="sm"
-          searchable
-          class="w-56 max-w-full"
-          placeholder="选择模型"
-          @update:model-value="switchModel"
-        />
-        <span v-else-if="state.settings?.model" class="truncate text-xs text-zinc-400">{{ state.settings.model }}</span>
-      </div>
       <div
         class="rounded-2xl border p-3 shadow-sm transition-all focus-within:shadow-md"
         :class="
@@ -311,6 +306,16 @@ function doClear() {
           <Button variant="ghost" size="sm" :icon="GitBranch" title="复制会话为分支" @click="doBranch" />
           <Button variant="ghost" size="sm" :icon="Eraser" title="清空当前对话（/clear）" @click="doClear" />
           <span class="flex-1" />
+          <Select
+            v-if="modelPickOptions.length"
+            :model-value="modelPickValue"
+            :options="modelPickOptions"
+            size="sm"
+            searchable
+            class="w-40 max-w-[40%] shrink-0"
+            placeholder="选择模型"
+            @update:model-value="pickModel"
+          />
           <Button v-if="state.busy" variant="secondary" size="sm" :icon="Square" @click="licode.interrupt()">
             停止
           </Button>

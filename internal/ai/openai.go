@@ -103,6 +103,17 @@ func (p *OpenAIProvider) endpoint() string {
 	return p.baseURL + "/chat/completions"
 }
 
+// normalizeTemperature 按模型要求修正 temperature。部分厂商（如
+// Moonshot 的 kimi-k3）只接受固定值 1，传其他值会直接返回 400。
+// 模型名大小写不敏感，未知模型原样返回。
+func normalizeTemperature(model string, t float64) float64 {
+	m := strings.ToLower(model)
+	if strings.Contains(m, "kimi-k3") || strings.Contains(m, "kimi-k2") {
+		return 1
+	}
+	return t
+}
+
 func (p *OpenAIProvider) buildBody(req ChatRequest, stream bool) ([]byte, error) {
 	msgs := make([]openaiMsg, 0, len(req.Messages)+1)
 	if req.System != "" {
@@ -159,7 +170,7 @@ func (p *OpenAIProvider) buildBody(req ChatRequest, stream bool) ([]byte, error)
 		body.MaxTokens = req.MaxTokens
 	}
 	if req.Temperature != 0 {
-		t := req.Temperature
+		t := normalizeTemperature(req.Model, req.Temperature)
 		body.Temperature = &t
 	}
 	return json.Marshal(body)

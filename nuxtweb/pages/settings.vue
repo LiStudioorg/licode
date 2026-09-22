@@ -716,13 +716,12 @@ const toolSourceBadge: Record<string, string> = {
       </nav>
       <div class="border-t border-zinc-200 p-2 dark:border-zinc-800 sm:p-3">
         <Button
-          variant="primary"
+          variant="ghost"
           class="w-full"
-          :loading="saving"
           :disabled="!state.settings || state.wsStatus !== 'connected'"
           @click="save"
         >
-          <span class="hidden sm:inline">保存设置</span>
+          <span class="hidden sm:inline">保存全部</span>
           <span class="sm:hidden">保存</span>
         </Button>
       </div>
@@ -740,7 +739,10 @@ const toolSourceBadge: Record<string, string> = {
 
         <!-- 基础 -->
         <template v-else-if="tab === 'basic'">
-          <h2 class="mb-4 text-lg font-semibold">基础设置</h2>
+          <div class="mb-4 flex items-center justify-between">
+            <h2 class="text-lg font-semibold">基础设置</h2>
+            <Button size="sm" variant="primary" :loading="saving" @click="save">保存</Button>
+          </div>
           <div class="grid grid-cols-3 gap-3">
             <label class="space-y-1">
               <span class="text-xs text-zinc-500">温度（0-2，越大越随机）</span>
@@ -886,6 +888,7 @@ const toolSourceBadge: Record<string, string> = {
             <span class="hidden text-xs text-zinc-400 sm:inline">同一时间使用一个厂商，可在对话输入框随时切换</span>
             <span class="flex-1" />
             <Button size="sm" variant="outline" :icon="Plus" @click="openProvider()">添加厂商</Button>
+            <Button size="sm" variant="primary" :loading="saving" @click="save">保存</Button>
           </div>
           <div v-if="!providers.length" class="rounded-xl border border-dashed border-zinc-300 p-8 text-center text-sm text-zinc-400 dark:border-zinc-700">
             还没有厂商配置，点击右上角「添加厂商」开始
@@ -1052,7 +1055,10 @@ const toolSourceBadge: Record<string, string> = {
 
         <!-- 高级 -->
         <template v-else-if="tab === 'advanced'">
-          <h2 class="mb-4 text-lg font-semibold">高级设置</h2>
+          <div class="mb-4 flex items-center justify-between">
+            <h2 class="text-lg font-semibold">高级设置</h2>
+            <Button size="sm" variant="primary" :loading="saving" @click="save">保存</Button>
+          </div>
           <div class="mb-4 rounded-xl border border-zinc-200 p-4 dark:border-zinc-800">
             <div class="mb-2 flex items-center justify-between">
               <span class="text-sm font-medium">AI 工作目录</span>
@@ -1139,6 +1145,7 @@ const toolSourceBadge: Record<string, string> = {
           <div class="mb-4 flex items-center justify-between">
             <h2 class="text-lg font-semibold">MCP 连接</h2>
             <Button size="sm" variant="outline" :icon="Plus" @click="addMcpServer">添加连接</Button>
+            <Button size="sm" variant="primary" :loading="saving" @click="save">保存</Button>
           </div>
           <p class="mb-3 text-xs text-zinc-500">
             仅支持网络方式（Streamable HTTP / SSE 的 http/https 地址）；本地命令方式已不再提供。

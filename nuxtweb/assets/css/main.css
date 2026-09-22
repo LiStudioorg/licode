@@ -125,22 +125,25 @@ body {
   background: transparent;
 }
 
-/* ===== 液态玻璃皮肤（html.glass）===== */
+/* ===== 液态玻璃皮肤（html.glass）：iOS 强模糊 ===== */
 html.glass {
-  --glass-blur: 24px;
-  --glass-panel: rgba(255, 255, 255, 0.42);
-  --glass-border: rgba(255, 255, 255, 0.55);
-  --glass-hi: rgba(255, 255, 255, 0.78);
+  --glass-blur: 40px;
+  --glass-saturate: 2.2;
+  --glass-panel: rgba(255, 255, 255, 0.28);
+  --glass-border: rgba(255, 255, 255, 0.6);
+  --glass-hi: rgba(255, 255, 255, 0.92);
 }
 html.glass[data-glass='soft'] {
-  --glass-blur: 14px;
-  --glass-panel: rgba(255, 255, 255, 0.55);
+  --glass-blur: 24px;
+  --glass-saturate: 1.8;
+  --glass-panel: rgba(255, 255, 255, 0.42);
 }
 html.glass[data-glass='strong'] {
-  --glass-blur: 36px;
-  --glass-panel: rgba(255, 255, 255, 0.26);
-  --glass-border: rgba(255, 255, 255, 0.4);
-  --glass-hi: rgba(255, 255, 255, 0.62);
+  --glass-blur: 60px;
+  --glass-saturate: 2.6;
+  --glass-panel: rgba(255, 255, 255, 0.18);
+  --glass-border: rgba(255, 255, 255, 0.5);
+  --glass-hi: rgba(255, 255, 255, 0.75);
 }
 
 html.glass body {
@@ -166,21 +169,21 @@ html.glass.dark[data-bg='plain'] body {
   background: #0b0b0f;
 }
 
-/* 半透明面板 + 背景模糊 */
+/* 半透明面板 + 背景模糊（iOS 强模糊） */
 html.glass .bg-white {
   background-color: var(--glass-panel) !important;
-  backdrop-filter: blur(var(--glass-blur)) saturate(1.8);
-  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(1.8);
+  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
 }
 html.glass.dark .dark\:bg-zinc-900 {
-  background-color: rgba(20, 20, 26, 0.5) !important;
-  backdrop-filter: blur(var(--glass-blur)) saturate(1.6);
-  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(1.6);
+  background-color: rgba(20, 20, 26, 0.42) !important;
+  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
 }
 html.glass.dark .dark\:bg-zinc-950 {
-  background-color: rgba(8, 8, 12, 0.42) !important;
-  backdrop-filter: blur(var(--glass-blur)) saturate(1.6);
-  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(1.6);
+  background-color: rgba(8, 8, 12, 0.36) !important;
+  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
 }
 html.glass .bg-zinc-50 {
   background-color: rgba(255, 255, 255, 0.38) !important;
@@ -195,21 +198,25 @@ html.glass.dark .dark\:bg-zinc-800\/60 {
   background-color: rgba(39, 39, 46, 0.55) !important;
 }
 
-/* 玻璃卡片：内高光 + 柔和投影 + 亮边 */
+/* 玻璃卡片：强模糊 + 内高光 + 柔和投影 + 亮边（iOS 层次感） */
 html.glass .rounded-xl,
 html.glass .rounded-2xl {
   border: 1px solid var(--glass-border) !important;
+  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
   box-shadow:
-    inset 0 1px 0 var(--glass-hi),
-    inset 0 -1px 0 rgba(255, 255, 255, 0.12),
-    0 12px 32px rgba(15, 23, 42, 0.14) !important;
+    inset 0 1.5px 0 var(--glass-hi),
+    inset 0 -1px 0 rgba(255, 255, 255, 0.2),
+    inset 1px 0 0 rgba(255, 255, 255, 0.16),
+    0 16px 40px rgba(15, 23, 42, 0.18) !important;
 }
 html.glass.dark .rounded-xl,
 html.glass.dark .rounded-2xl {
-  border-color: rgba(255, 255, 255, 0.14) !important;
+  border-color: rgba(255, 255, 255, 0.18) !important;
   box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.16),
-    0 14px 36px rgba(0, 0, 0, 0.5) !important;
+    inset 0 1.5px 0 rgba(255, 255, 255, 0.22),
+    inset 0 -1px 0 rgba(255, 255, 255, 0.06),
+    0 18px 44px rgba(0, 0, 0, 0.55) !important;
 }
 
 /* 输入框/按钮玻璃化（textarea 除外：它嵌在输入卡片里，必须保持透明） */

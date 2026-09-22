@@ -185,10 +185,10 @@ func (s *Settings) finalize() error {
 	s.UpsertActive()
 	s.syncTopLevel()
 	if s.Temperature == 0 {
-		s.Temperature = 0.7
+		s.Temperature = 1
 	}
 	if s.MaxTokens == 0 {
-		s.MaxTokens = 4096
+		s.MaxTokens = 1000000
 	}
 	if s.MaxIterations == 0 {
 		s.MaxIterations = 16

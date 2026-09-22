@@ -177,7 +177,8 @@ func (p *GeminiProvider) buildBody(req ChatRequest) ([]byte, error) {
 			MaxOutputTokens int      `json:"maxOutputTokens,omitempty"`
 		}{}
 		if req.Temperature != 0 {
-			gc.Temperature = &req.Temperature
+			t := normalizeTemperature(req.Model, req.Temperature)
+			gc.Temperature = &t
 		}
 		if req.MaxTokens > 0 {
 			gc.MaxOutputTokens = req.MaxTokens

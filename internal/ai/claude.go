@@ -156,7 +156,7 @@ func (p *ClaudeProvider) buildBody(req ChatRequest) ([]byte, error) {
 		body.MaxTokens = 4096
 	}
 	if req.Temperature != 0 {
-		t := req.Temperature
+		t := normalizeTemperature(req.Model, req.Temperature)
 		body.Temperature = &t
 	}
 	return json.Marshal(body)
