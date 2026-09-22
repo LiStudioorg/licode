@@ -204,6 +204,19 @@ func handleMkdir(w http.ResponseWriter, r *http.Request, ws *workspaceState) {
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "path": abs})
 }
 
+// protectedPath 判断是否为不允许通过文件管理 API 删改的关键路径
+// （文件系统根目录、用户主目录），避免一次请求清空整个系统或用户数据。
+func protectedPath(abs string) bool {
+	clean := filepath.Clean(abs)
+	if clean == string(filepath.Separator) || clean == "/" {
+		return true
+	}
+	if home, err := os.UserHomeDir(); err == nil && home != "" && filepath.Clean(home) == clean {
+		return true
+	}
+	return false
+}
+
 // handleDeleteFile 删除文件/目录（可为绝对路径）。POST /api/delete {path, recursive}
 // 非空目录必须显式 recursive=true 才会删除，防止误删。
 func handleDeleteFile(w http.ResponseWriter, r *http.Request, ws *workspaceState) {
@@ -224,6 +237,10 @@ func handleDeleteFile(w http.ResponseWriter, r *http.Request, ws *workspaceState
 	abs, err := ws.fsPath(body.Path)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "路径无效"})
+		return
+	}
+	if protectedPath(abs) {
+		writeJSON(w, http.StatusForbidden, map[string]any{"error": "该路径受保护，禁止删除"})
 		return
 	}
 	info, err := os.Stat(abs)
@@ -417,7 +434,9 @@ func handleUpload(w http.ResponseWriter, r *http.Request, ws *workspaceState) {
 		return
 	}
 	defer out.Close()
-	if _, err := io.Copy(out, file); err != nil {
+	// 单文件上传上限与 ParseMultipartForm 的 256MB 保持一致，防止磁盘被写满。
+	if _, err := io.Copy(out, io.LimitReader(file, 256<<20)); err != nil {
+		_ = os.Remove(dst)
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
 		return
 	}
@@ -451,16 +470,26 @@ func handleDownload(w http.ResponseWriter, r *http.Request, ws *workspaceState) 
 	http.ServeContent(w, r, filepath.Base(abs), info.ModTime(), f)
 }
 
+// 目录打包下载限制：单文件与总量上限，防止磁盘/内存耗尽。
+const (
+	maxZipFileSize  = 512 << 20 // 单文件 512MB
+	maxZipTotalSize = 2 << 30   // 总量 2GB
+)
+
 // downloadZip 把目录递归打包为 zip 并流式下载。
 func downloadZip(w http.ResponseWriter, r *http.Request, dir string) {
 	w.Header().Set("Content-Type", "application/zip")
 	setAttachment(w, filepath.Base(dir)+".zip")
 	zw := zip.NewWriter(w)
+	var total int64
 	_ = filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
 		if d.IsDir() {
+			return nil
+		}
+		if info, ierr := d.Info(); ierr == nil && info.Size() > maxZipFileSize {
 			return nil
 		}
 		rel, err := filepath.Rel(dir, p)
@@ -475,8 +504,12 @@ func downloadZip(w http.ResponseWriter, r *http.Request, dir string) {
 		if err != nil {
 			return err
 		}
-		_, err = io.Copy(zf, src)
+		n, err := io.Copy(zf, io.LimitReader(src, maxZipFileSize))
 		src.Close()
+		total += n
+		if total > maxZipTotalSize {
+			return io.EOF
+		}
 		return err
 	})
 	zw.Close()
@@ -513,7 +546,15 @@ func sanitizeName(name string) string {
 }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {
+	// 先编码再写头：编码失败时仍能返回 500，而不是发出半截 JSON。
+	data, err := json.Marshal(v)
+	if err != nil {
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte(`{"error":"响应编码失败"}`))
+		return
+	}
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(code)
-	_ = json.NewEncoder(w).Encode(v)
+	_, _ = w.Write(append(data, '\n'))
 }

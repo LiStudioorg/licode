@@ -722,6 +722,7 @@ func runServe(opts *ServeOptions) error {
 
 // applyServerSettings 校验并应用新的设置，重建客户端。
 func applyServerSettings(st *serverState, msg websocket.ClientMessage) error {
+	// msg.Settings 已是反序列化后的结构，直接转换，无需再 Marshal/Unmarshal 一轮。
 	data, err := json.Marshal(msg.Settings)
 	if err != nil {
 		return fmt.Errorf("设置格式错误: %w", err)
@@ -750,6 +751,8 @@ func applyServerSettings(st *serverState, msg websocket.ClientMessage) error {
 }
 
 // reloadServerSettings 从磁盘重读配置并重建客户端（热重载，SIGHUP 触发）。
+// 与启动路径一致：AI/API 设置来自 ~/.licode/config.json（settings.Load），
+// 而非 config.toml（后者仅含服务器监听项），避免热重载读到不同来源。
 func reloadServerSettings(st *serverState) error {
 	s, err := settings.Load()
 	if err != nil {
@@ -793,31 +796,35 @@ func runServerAgentWithAttachments(ctx context.Context, st *serverState, cs *con
 	if s.MaxCtxTokens > 0 {
 		sess.SetMaxTokens(s.MaxCtxTokens)
 	}
-	defer ag.Close()
-	ag.Ask = func(ctx context.Context, toolName, args string) (bool, error) {
-		if s.AutoAllow || sess.AlwaysAllowed(toolName) {
-			return true, nil
-		}
-		askID := fmt.Sprintf("ask-%d", cs.askSeq.Add(1))
-		ch := make(chan bool, 1)
-		cs.mu.Lock()
-		cs.pending[askID] = ch
-		cs.askTool[askID] = toolName
-		cs.mu.Unlock()
-		c.SendEvent(websocket.ServerEvent{
-			Type: websocket.EvtAsk, ToolName: toolName, ToolArgs: args, AskID: askID, SessionID: sessID,
-		})
-		select {
-		case ok := <-ch:
-			return ok, nil
-		case <-ctx.Done():
+		defer ag.Close()
+		ag.Ask = func(ctx context.Context, toolName, args string) (bool, error) {
+			if s.AutoAllow || sess.AlwaysAllowed(toolName) {
+				return true, nil
+			}
+			askID := fmt.Sprintf("ask-%d", cs.askSeq.Add(1))
+			ch := make(chan bool, 1)
 			cs.mu.Lock()
-			delete(cs.pending, askID)
-			delete(cs.askTool, askID)
+			cs.pending[askID] = ch
+			cs.askTool[askID] = toolName
 			cs.mu.Unlock()
-			return false, ctx.Err()
+			// 无论因何退出（收到回复/上下文取消/Agent 异常结束），都清理映射，
+			// 避免前端不回复时 pending/askTool 条目永久驻留泄漏。
+			defer func() {
+				cs.mu.Lock()
+				delete(cs.pending, askID)
+				delete(cs.askTool, askID)
+				cs.mu.Unlock()
+			}()
+			c.SendEvent(websocket.ServerEvent{
+				Type: websocket.EvtAsk, ToolName: toolName, ToolArgs: args, AskID: askID, SessionID: sessID,
+			})
+			select {
+			case ok := <-ch:
+				return ok, nil
+			case <-ctx.Done():
+				return false, ctx.Err()
+			}
 		}
-	}
 
 	stream := true
 	if s.Streaming != nil {
@@ -907,10 +914,10 @@ func isUnsafeMethod(m string) bool {
 }
 
 // sameOriginGuard 对写请求做同源校验：若请求带 Origin 头且与 Host 不符则拒绝，
-// 防止跨站伪造请求访问带 Cookie 的 /api/* 写接口。无 Origin（curl/脚本）或同源放行。
+// 防止跨站伪造请求访问带 Cookie 的 /api/* 写接口与 /ws 升级。无 Origin（curl/脚本）或同源放行。
 func sameOriginGuard(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if isUnsafeMethod(r.Method) && strings.HasPrefix(r.URL.Path, "/api/") {
+		if (isUnsafeMethod(r.Method) && strings.HasPrefix(r.URL.Path, "/api/")) || r.URL.Path == "/ws" {
 			if o := r.Header.Get("Origin"); o != "" && !originMatchesHost(o, r.Host) {
 				w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 				w.WriteHeader(http.StatusForbidden)
@@ -944,6 +951,12 @@ func securityHeaders(next http.Handler, tls bool) http.Handler {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("X-Frame-Options", "DENY")
 		w.Header().Set("Referrer-Policy", "no-referrer")
+		// CSP：禁止对象嵌入与外部脚本，允许内联样式（Nuxt 产物需要）；
+		// connect-src 放开 ws/wss 以支持同源 WebSocket。
+		w.Header().Set("Content-Security-Policy",
+			"default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; "+
+				"img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' ws: wss:; "+
+				"object-src 'none'; base-uri 'self'; frame-ancestors 'none'")
 		if tls {
 			w.Header().Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
 		}
