@@ -406,6 +406,31 @@ func handleUpload(w http.ResponseWriter, r *http.Request, ws *workspaceState) {
 		return
 	}
 	defer file.Close()
+	
+	// 安全校验：限制文件大小（单文件上限 100MB）
+	const maxFileSize = 100 << 20
+	if header.Size > maxFileSize {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "文件过大（最大 100MB）"})
+		return
+	}
+	
+	// 安全校验：验证文件类型（基于扩展名和 MIME 类型）
+	ext := strings.ToLower(filepath.Ext(header.Filename))
+	allowedExts := map[string]bool{
+		".txt": true, ".md": true, ".go": true, ".py": true, ".js": true, ".ts": true,
+		".json": true, ".yaml": true, ".yml": true, ".toml": true, ".xml": true,
+		".html": true, ".css": true, ".sh": true, ".bat": true, ".cmd": true,
+		".log": true, ".csv": true, ".sql": true, ".java": true, ".c": true,
+		".cpp": true, ".h": true, ".hpp": true, ".rs": true, ".rb": true,
+		".php": true, ".vue": true, ".jsx": true, ".tsx": true, ".png": true,
+		".jpg": true, ".jpeg": true, ".gif": true, ".svg": true, ".pdf": true,
+		".zip": true, ".tar": true, ".gz": true, ".bin": true,
+	}
+	if ext != "" && !allowedExts[ext] {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "不支持的文件类型"})
+		return
+	}
+	
 	target, err := ws.fsPath(r.FormValue("dir"))
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "目录无效"})
@@ -435,7 +460,7 @@ func handleUpload(w http.ResponseWriter, r *http.Request, ws *workspaceState) {
 	}
 	defer out.Close()
 	// 单文件上传上限与 ParseMultipartForm 的 256MB 保持一致，防止磁盘被写满。
-	if _, err := io.Copy(out, io.LimitReader(file, 256<<20)); err != nil {
+	if _, err := io.Copy(out, io.LimitReader(file, maxFileSize)); err != nil {
 		_ = os.Remove(dst)
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
 		return

@@ -880,28 +880,35 @@ func autoTitle(content string) string {
 // .html 不缓存（改版即时生效）；/_nuxt/ 资源名带内容哈希，可长缓存。
 // 目录路径（/settings、/tools）会解析到其 index.html，避免被当成文件服务而 301。
 func serveNuxtFile(w http.ResponseWriter, r *http.Request, nuxt fs.FS, name string) {
-	info, err := fs.Stat(nuxt, name)
+	// 安全校验：防止路径遍历攻击
+	cleanName := filepath.Clean(name)
+	if strings.HasPrefix(cleanName, "..") || filepath.IsAbs(cleanName) {
+		http.NotFound(w, r)
+		return
+	}
+	
+	info, err := fs.Stat(nuxt, cleanName)
 	if err != nil {
 		http.NotFound(w, r)
 		return
 	}
 	if info.IsDir() {
-		idx := strings.TrimSuffix(name, "/") + "/index.html"
+		idx := strings.TrimSuffix(cleanName, "/") + "/index.html"
 		fi, ierr := fs.Stat(nuxt, idx)
 		if ierr != nil || fi.IsDir() {
 			http.NotFound(w, r)
 			return
 		}
-		name = idx
+		cleanName = idx
 	}
-	if strings.HasSuffix(name, ".html") {
+	if strings.HasSuffix(cleanName, ".html") {
 		w.Header().Set("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
 		w.Header().Set("Pragma", "no-cache")
 		w.Header().Set("Expires", "0")
 	} else {
 		w.Header().Set("Cache-Control", "public, max-age=604800")
 	}
-	http.ServeFileFS(w, r, nuxt, name)
+	http.ServeFile(w, r, filepath.Join("nuxtweb", cleanName))
 }
 
 // isUnsafeMethod 判断是否为写请求方法（GET/HEAD/OPTIONS 之外）。

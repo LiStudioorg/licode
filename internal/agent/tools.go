@@ -615,10 +615,9 @@ func grepFallback(ctx context.Context, pattern, include, root string) (string, e
 	var sb strings.Builder
 	matches := 0
 	root = filepath.Clean(root)
-	stop := ctx.Err()
 	_ = filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
-		if stop != nil || ctx.Err() != nil {
-			return fs.SkipAll
+		if ctx.Err() != nil {
+			return fs.SkipDir
 		}
 		if err != nil {
 			return nil
@@ -644,7 +643,7 @@ func grepFallback(ctx context.Context, pattern, include, root string) (string, e
 				matches++
 				if matches >= 1000 || sb.Len() > 30000 {
 					sb.WriteString("...(truncated)")
-					return fs.SkipAll
+					return fs.SkipDir
 				}
 			}
 		}
@@ -684,7 +683,7 @@ func globMatches(pattern string) ([]string, error) {
 		if re.MatchString(p) {
 			out = append(out, p)
 			if len(out) >= maxMatches {
-				return fs.SkipAll
+				return fs.SkipDir
 			}
 		}
 		return nil
