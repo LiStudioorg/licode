@@ -24,6 +24,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"licode/cordis"
 	"licode/internal/agent"
 	"licode/internal/ai"
 	"licode/internal/rag"
@@ -32,6 +33,7 @@ import (
 	"licode/internal/version"
 	"licode/internal/web"
 	"licode/internal/websocket"
+	"licode/plugins"
 )
 
 // ServeOptions holds resolved configuration for the serve command.
@@ -138,8 +140,20 @@ type serverState struct {
 	mu           sync.RWMutex
 	settings     settings.Settings
 	client       ai.LLMClient
-	shuttingDown bool       // 收到关停信号后置位，拒绝新连接
-	rag          *rag.Index // 特性5：项目源码轻量 RAG 索引（懒构建）
+	shuttingDown bool                 // 收到关停信号后置位，拒绝新连接
+	rag          *rag.Index           // 特性5：项目源码轻量 RAG 索引（懒构建）
+	cordis       *cordis.Runtime      // 插件微内核（工具树/权限管道）
+	toolReg      *cordis.ToolRegistry // cordis 工具执行入口（Agent.Pipeline）
+
+	// 显式提示词缓存 keepalive：缓存最近一次真实请求的“稳定前缀”（system+tools+model），
+	// 空闲期用它发极小的预热请求刷新 Claude 缓存 TTL。lastRealRun 记录上次真实请求时间，
+	// 有真实流量时不重复预热（真实请求本身就会刷新缓存）。
+	warmMu      sync.Mutex
+	warmModel   string
+	warmSystem  string
+	warmTools   []ai.Tool
+	warmOK      bool
+	lastRealRun atomic.Int64 // unix nanos
 }
 
 // connState 保存每个连接独立的会话（多对话）与待确认的工具调用。
@@ -188,6 +202,20 @@ func runServe(opts *ServeOptions) error {
 	st := &serverState{}
 	st.settings = settings.Defaults()
 	st.settings.ApplyFlags(opts.NoSubAgents)
+
+	// Cordis 插件微内核：内置工具与权限管道都注册进插件树，
+	// 工具执行统一走 tools/pre-execute → execute → post-execute。
+	rt := cordis.NewRuntime(cordis.WithOutput(os.Stderr))
+	st.cordis = rt
+	if v, ok := rt.Get(cordis.ServiceTools); ok {
+		st.toolReg = v.(*cordis.ToolRegistry)
+	}
+	if err := plugins.RegisterAll(rt, agent.ShellConfig{Path: st.settings.Snapshot().ShellPath}); err != nil {
+		log.Printf("内置插件加载失败（工具回退为旧内联路径）: %v", err)
+		st.cordis, st.toolReg = nil, nil
+	} else {
+		defer rt.Shutdown()
+	}
 
 	client, err := st.settings.NewClient()
 	if err != nil {
@@ -679,6 +707,13 @@ func runServe(opts *ServeOptions) error {
 
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
+
+	// 空闲期提示词缓存保活（仅 Claude + 显式开启时真正发请求）：绑定根 ctx，
+	// runServe 返回即取消，goroutine 不游离。
+	kaCtx, kaCancel := context.WithCancel(context.Background())
+	defer kaCancel()
+	startKeepalive(kaCtx, st)
+
 	// SIGHUP：热重载配置（重读 ~/.licode/config.json 并重建客户端），不中断服务。
 	hup := make(chan os.Signal, 1)
 	signal.Notify(hup, syscall.SIGHUP)
@@ -806,12 +841,22 @@ func runServerAgentWithAttachments(ctx context.Context, st *serverState, cs *con
 	}
 
 	ag := s.BuildAgent(client)
+	if st.toolReg != nil {
+		// 工具执行走 cordis 管道（权限/审计由插件监听器处理）。
+		ag.Pipeline = st.toolReg
+	}
 	if roleSystem != "" {
 		ag.System = roleSystem + "\n" + ag.System
 	}
 	ag.Session = sess
 	// 运行模式来自会话（/plan 只读、/build 全工具），默认 build。
 	ag.Mode = sess.Mode()
+	// 记录“真实请求”时刻并缓存稳定前缀：空闲期 keepalive 用它刷新 Claude 缓存 TTL；
+	// 有真实流量时（lastRealRun 很新）keepalive 自动跳过，避免重复预热浪费 token。
+	st.lastRealRun.Store(time.Now().UnixNano())
+	if s.PromptCacheActive() && s.KeepaliveSec > 0 {
+		st.setWarmPrefix(ag.Model, ag.System, ag.VisibleTools())
+	}
 	// MaxCtxTokens 必须落在真实会话上（BuildAgent 里的临时会话已被上面的
 	// 赋值覆盖，若不重设则上下文窗口保护会静默失效）。
 	if s.MaxCtxTokens > 0 {

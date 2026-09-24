@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"licode/cordis"
 	"licode/internal/ai"
 	"licode/internal/logx"
 	"licode/internal/session"
@@ -49,15 +50,15 @@ const (
 
 // Event is a UI-agnostic stream event.
 type Event struct {
-	Type      EventType `json:"type"`
-	Content   string    `json:"content,omitempty"`
-	ToolName  string    `json:"toolName,omitempty"`
-	ToolArgs  string    `json:"toolArgs,omitempty"`
-	ToolOut   string    `json:"toolOut,omitempty"`
-	Error     string    `json:"error,omitempty"`
-	Settings  any       `json:"settings,omitempty"`
-	AskID     string    `json:"askId,omitempty"`
-	SessionID string    `json:"sessionId,omitempty"`
+	Type      EventType   `json:"type"`
+	Content   string      `json:"content,omitempty"`
+	ToolName  string      `json:"toolName,omitempty"`
+	ToolArgs  string      `json:"toolArgs,omitempty"`
+	ToolOut   string      `json:"toolOut,omitempty"`
+	Error     string      `json:"error,omitempty"`
+	Settings  any         `json:"settings,omitempty"`
+	AskID     string      `json:"askId,omitempty"`
+	SessionID string      `json:"sessionId,omitempty"`
 	Stats     *TokenStats `json:"stats,omitempty"`
 }
 
@@ -370,10 +371,19 @@ type Agent struct {
 	PromptDir string
 	// SpillDir/SpillLimit：超长工具结果溢出落盘（三层裁剪管道第 1 层）。
 	// SpillLimit<=0 关闭溢出。
-	SpillDir  string
+	SpillDir   string
 	SpillLimit int
 	// ContextExtra 额外注入 C 区尾部的上下文（如 RAG 检索片段），不污染冻结前缀。
 	ContextExtra string
+	// Pipeline 非空时工具执行改走 cordis 工具管道（waterfall：权限/审计/脱敏
+	// 由插件监听器处理，Agent 不再本地判断权限）；为空保持旧内联逻辑。
+	Pipeline *cordis.ToolRegistry
+	// NoContextTail 关闭 C 区尾部注入（日期/用量/模式）。子代理用：它们是聚焦的
+	// 独立会话，主 Agent 的日期/token 用量对子任务是噪声且纯耗 token，故不注入。
+	NoContextTail bool
+	// PromptCache 请求 Provider 显式缓存稳定前缀（目前 Claude: cache_control）。
+	// 由 settings.BuildAgent 依据设置置位；关闭时行为与旧版逐字节一致。
+	PromptCache bool
 	// mcpMgr 由 BuildAgent 装配的 MCP 连接管理器；一次运行结束后由调用方
 	// 通过 Close 释放，避免 stdio 子进程泄漏。
 	mcpMgr *MCPManager
@@ -426,6 +436,15 @@ func (a *Agent) RunWithAttachments(ctx context.Context, input string, attachment
 		defer cancel()
 	}
 	logx.AgentStart(a.TraceID, a.Name)
+	if a.Pipeline != nil {
+		// 会话级钩子随工具执行链透传给 cordis 权限/审计监听器。
+		ctx = WithRunHooks(ctx, RunHooks{
+			Permissions:    a.Permissions,
+			Mode:           a.Mode,
+			Ask:            a.Ask,
+			AutoAllowPaths: a.AutoAllowPaths,
+		})
+	}
 	a.Session.Add(ai.Message{Role: ai.RoleUser, Content: input, Attachments: attachments})
 
 	var asst ai.Message
@@ -441,8 +460,10 @@ func (a *Agent) RunWithAttachments(ctx context.Context, input string, attachment
 		// 三层裁剪管道第 2 层：纯尾部截断（丢最旧、保最新、清理孤儿 tool 消息）。
 		msgs := a.Session.MessagesForLLM(a.System)
 		// 第 3 层：把 C 区易变信息（日期/用量/模式提示词/RAG）并入最后一条 user 消息，
-		// 系统前缀保持字节冻结，稳定命中 Provider 前缀缓存。
-		msgs = mergeContextTail(msgs, a.envContext())
+		// 系统前缀保持字节冻结，稳定命中 Provider 前缀缓存。子代理关闭该注入。
+		if !a.NoContextTail {
+			msgs = mergeContextTail(msgs, a.envContext())
+		}
 		a.requests++
 		req := ai.ChatRequest{
 			Model:       a.Model,
@@ -451,6 +472,7 @@ func (a *Agent) RunWithAttachments(ctx context.Context, input string, attachment
 			Tools:       a.visibleTools(),
 			MaxTokens:   a.MaxTokens,
 			Temperature: a.Temperature,
+			PromptCache: a.PromptCache,
 		}
 
 		asst = ai.Message{}
@@ -576,22 +598,25 @@ func (a *Agent) permissionMode(tool string) string {
 }
 
 // runTool 执行单个工具，先做权限检查；支持迭代式自动重试。
+// Pipeline 非空时权限/确认/脱敏策略已外置到 cordis 监听器，这里仅负责执行。
 func (a *Agent) runTool(ctx context.Context, tc ai.ToolCall, onEvent func(Event) error) (string, error) {
-	switch a.permissionMode(tc.Function.Name) {
-	case "deny":
-		return "已拒绝执行 " + tc.Function.Name + "（权限配置为禁止）", nil
-	case "ask":
-		if a.Ask != nil {
-			ok, aerr := a.Ask(ctx, tc.Function.Name, tc.Function.Arguments)
-			if aerr != nil {
-				return "", aerr
+	if a.Pipeline == nil {
+		switch a.permissionMode(tc.Function.Name) {
+		case "deny":
+			return "已拒绝执行 " + tc.Function.Name + "（权限配置为禁止）", nil
+		case "ask":
+			if a.Ask != nil {
+				ok, aerr := a.Ask(ctx, tc.Function.Name, tc.Function.Arguments)
+				if aerr != nil {
+					return "", aerr
+				}
+				if !ok {
+					return "用户拒绝执行工具 " + tc.Function.Name, nil
+				}
+			} else {
+				// Ask 未接线时按拒绝处理，避免“ask”静默放行高风险工具。
+				return "已拒绝执行 " + tc.Function.Name + "（需人工确认，但当前无确认通道）", nil
 			}
-			if !ok {
-				return "用户拒绝执行工具 " + tc.Function.Name, nil
-			}
-		} else {
-			// Ask 未接线时按拒绝处理，避免“ask”静默放行高风险工具。
-			return "已拒绝执行 " + tc.Function.Name + "（需人工确认，但当前无确认通道）", nil
 		}
 	}
 	var out string
@@ -614,6 +639,17 @@ func (a *Agent) runTool(ctx context.Context, tc ai.ToolCall, onEvent func(Event)
 		})
 	}
 	exec := func() (string, error) {
+		if a.Pipeline != nil {
+			if _, ok := a.Pipeline.Get(tc.Function.Name); ok {
+				var args map[string]any
+				if s := strings.TrimSpace(tc.Function.Arguments); s != "" {
+					if err := json.Unmarshal([]byte(s), &args); err != nil {
+						return "", fmt.Errorf("tool %s: bad arguments: %w", tc.Function.Name, err)
+					}
+				}
+				return a.Pipeline.Execute(ctx, tc.Function.Name, args)
+			}
+		}
 		return a.Tools.Execute(ctx, tc.Function.Name, []byte(tc.Function.Arguments))
 	}
 	for attempt := 0; ; attempt++ {

@@ -143,12 +143,18 @@ out, err := reg.Execute(ctx, "Read", map[string]any{"path": "main.go"})
 
 迁移顺序建议（每步都能 `go build && go test`）：
 
-1. `NewRuntime()` 在 `cmd/serve.go` 启动时创建；`settings`、`session` 先用 `r.Provide` 静态注册。
-2. 把 `agent.RegisterDefaultTools` 拆成 `builtin-tools-fs` / `builtin-tools-shell`，
-   工具注册改走 `ctx.RegisterTool`；`Registry` 保留为兼容门面。
-3. `agent/permissions` 服务替代 `Agent.Permissions` map 的散落判断。
-4. `builtin-llm-*` 接管 `ai.LLMClient` 构造；删掉 `settings.BuildAgent` 里的 switch。
-5. `builtin-agent-loop` 把 `Agent.Run` 的事件点改成 waterfall 发射。
+1. ✅ `cmd/serve.go` 启动时创建 `cordis.Runtime`（`serverState.cordis/toolReg`），
+   `plugins.RegisterAll` 加载内置插件，关停时 `rt.Shutdown()`。
+2. ✅ `plugins/builtin-tools-fs` / `builtin-tools-shell`：桥接 `RegisterDefaultTools`
+   的实现注册进 Cordis 工具树（含 `~/.licode/tools` 外部命令工具快照）；
+   `agent.Registry` 保留为列表/回退门面，`Agent.Pipeline` 非空时执行走
+   `ToolRegistry.Execute`（未知工具名自动回退旧 Registry）。
+3. ✅ 权限外置：`plugins/builtin-permissions` 在 `tools/pre-execute`（priority -20）
+   处理 deny/ask/plan 只读；策略经 `agent.RunHooks`（Go context）透传
+   （`Agent.RunWithAttachments` 自动注入 `Permissions/Mode/Ask/AutoAllowPaths`）。
+   脱敏暂保留在 Run 循环（`RedactSecrets` 幂等，可平滑迁到 post 监听器）。
+4. ⬜ `builtin-llm-*` 接管 `ai.LLMClient` 构造；删掉 `settings.BuildAgent` 里的 switch。
+5. ⬜ `builtin-agent-loop` 把 `Agent.Run` 的事件点改成 waterfall 发射。
 
 ## 5. 第三方（外部进程）插件协议（阶段三）
 

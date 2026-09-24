@@ -50,6 +50,9 @@ type Tool struct {
 type ToolCall struct {
 	Name string
 	Args map[string]any
+	// Ctx 是发起本次工具调用的 Go 上下文，处理器可从中读取每次运行的
+	// 钩子（权限/确认回调等），并响应取消。
+	Ctx context.Context
 	// Output 非 nil 时，Pre 处理器用它短路工具执行，其值直接作为工具结果。
 	Output *string
 }

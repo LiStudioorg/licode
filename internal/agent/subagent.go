@@ -34,6 +34,7 @@ type SubAgentSpec struct {
 func (s SubAgentSpec) buildAgent() *Agent {
 	a := NewAgent(s.Client, s.Prompt)
 	a.Name = s.Name
+	a.NoContextTail = true // 子代理不注入主 Agent 的日期/用量/模式（噪声且耗 token）
 	a.Timeout = s.Timeout
 	a.Shell = ShellConfig{Path: s.ShellPath}
 	a.Permissions = s.permissions

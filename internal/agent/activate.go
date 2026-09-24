@@ -25,6 +25,10 @@ var readOnlyToolSet = map[string]bool{
 // IsReadOnlyTool 报告工具在 plan 模式下是否可用。
 func IsReadOnlyTool(name string) bool { return readOnlyToolSet[name] }
 
+// VisibleTools 是 visibleTools 的导出包装，供上层（keepalive 预热）复用与真实请求
+// 完全一致的“稳定工具前缀”（同序、同集合），从而命中同一个 Provider 缓存块。
+func (a *Agent) VisibleTools() []ai.Tool { return a.visibleTools() }
+
 // visibleTools 返回本次请求要发给模型的工具目录：
 //   - 按工具名确定性升序排序（关键：Map 遍历顺序随机会让每次请求的工具前缀都不同，
 //     直接击穿 Provider 的前缀缓存，这里一次性消除该非确定性）。
