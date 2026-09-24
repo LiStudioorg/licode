@@ -112,6 +112,9 @@ type Settings struct {
 	// 特性1：语义缓存
 	CacheEnabled bool `json:"cache_enabled"` // 开启问题-结果缓存
 	CacheTTL     int  `json:"cache_ttl"`     // 缓存有效期（秒，默认 3600）
+	// 特性2：Provider 显式提示词缓存（Claude cache_control）+ 空闲保活
+	PromptCache  bool `json:"prompt_cache"`  // 显式缓存稳定前缀（仅 Claude 生效，命中约 0.1× 计费）
+	KeepaliveSec int  `json:"keepalive_sec"` // 空闲期刷新缓存 TTL 的间隔秒（0=关闭；仅 Claude 且有历史请求时）
 	// 特性3：迭代式工具调用
 	ToolAutoRetry bool `json:"tool_auto_retry"` // 空结果/错误时自动重试
 	ToolRetryMax  int  `json:"tool_retry_max"`  // 最多重试次数（默认 3）
@@ -207,6 +210,17 @@ func (s *Settings) ActiveProvider() ProviderConfig {
 		}
 	}
 	return ProviderConfig{Provider: s.Provider, BaseURL: s.BaseURL, APIKey: s.APIKey, Model: s.Model}
+}
+
+// PromptCacheActive 报告“显式提示词缓存”是否真正生效：需开关打开且激活厂商为 Claude
+// （只有 Claude 支持 cache_control 显式断点；OpenAI/Gemini 的前缀缓存是自动的，
+// 无需断点，也没有可刷新的 TTL）。后台 keepalive 仅在该条件下启动，避免空耗 token。
+func (s *Settings) PromptCacheActive() bool {
+	if !s.PromptCache {
+		return false
+	}
+	pc := s.ActiveProvider()
+	return pc.resolveType() == "claude"
 }
 
 // SetActiveProvider 切换到指定厂商（未配置则创建默认条目）。
@@ -307,6 +321,7 @@ func (s *Settings) BuildAgent(client ai.LLMClient) *agent.Agent {
 	})
 	ag := agent.NewAgent(client, anchor.System)
 	ag.SysHash = anchor.Hash
+	ag.PromptCache = s.PromptCache
 	ag.PromptDir = promptDir
 	ag.SpillDir = filepath.Join(CacheDir(), "spills")
 	ag.SpillLimit = spillLimitBytes
@@ -383,6 +398,8 @@ func (s *Settings) Snapshot() Settings {
 		RedactSecrets:   s.RedactSecrets,
 		CacheEnabled:    s.CacheEnabled,
 		CacheTTL:        s.CacheTTL,
+		PromptCache:     s.PromptCache,
+		KeepaliveSec:    s.KeepaliveSec,
 		ToolAutoRetry:   s.ToolAutoRetry,
 		ToolRetryMax:    s.ToolRetryMax,
 		ShutdownTimeout: s.ShutdownTimeout,
