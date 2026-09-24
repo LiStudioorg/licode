@@ -32,6 +32,5 @@ onMounted(async () => {
       <TopBar />
       <ChatArea />
     </main>
-    <RightPanel />
   </div>
 </template>

@@ -163,7 +163,6 @@ function createStore() {
     ask: null as AskInfo | null,
     settings: null as Settings | null,
     stats: emptyStats(),
-    rightTab: '' as '' | 'info' | 'files',
     sidebarCollapsed: false,
   })
 

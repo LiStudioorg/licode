@@ -1,10 +1,9 @@
 <script setup lang="ts">
-import { Message, Button, Badge, Divider } from 'fuxsto-design'
+import { Button, Badge, Divider } from 'fuxsto-design'
 import {
   Sun,
   Moon,
   PanelLeft,
-  PanelRight,
   Info,
   FolderOpen,
   Bot,
@@ -13,10 +12,6 @@ import {
 const licode = useLicode()
 const { state } = licode
 const { mode, toggleTheme } = useTheme()
-
-function toggleRight(tab: 'info' | 'files') {
-  state.rightTab = state.rightTab === tab ? '' : tab
-}
 </script>
 
 <template>
@@ -34,29 +29,13 @@ function toggleRight(tab: 'info' | 'files') {
       {{ state.settings.model }}
     </Badge>
     <div class="min-w-0 flex-1" />
-    <Button
-      v-for="t in ([
-        ['info', Info, '信息'],
-        ['files', FolderOpen, '文件'],
-      ] as const)"
-      :key="t[0]"
-      size="sm"
-      :variant="state.rightTab === t[0] ? 'secondary' : 'ghost'"
-      :icon="t[1]"
-      :title="t[2]"
-      @click="toggleRight(t[0])"
-    >
-      {{ t[2] }}
+    <Button size="sm" variant="ghost" :icon="Info" title="信息" @click="navigateTo('/info')">
+      信息
+    </Button>
+    <Button size="sm" variant="ghost" :icon="FolderOpen" title="文件" @click="navigateTo('/files')">
+      文件
     </Button>
     <Divider direction="vertical" class="h-5" />
     <Button variant="ghost" size="sm" :icon="mode === 'dark' ? Sun : Moon" title="切换主题" @click="toggleTheme" />
-    <Button
-      variant="ghost"
-      size="sm"
-      :icon="PanelRight"
-      title="信息面板"
-      :class="{ 'opacity-40': !state.rightTab }"
-      @click="state.rightTab = state.rightTab ? '' : 'info'"
-    />
   </header>
 </template>
