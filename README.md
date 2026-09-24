@@ -29,7 +29,7 @@
 ```bash
 ./build.sh                  # 一键编译（9 平台，产物在 build/）
 ./build/licode-<os>-<arch>  # 启动（如 ./build/licode-linux-amd64）
-
+ 
 # 参数
 ./build/licode-linux-amd64 --host 0.0.0.0 --port 8080    # 局域网/手机访问
 ./build/licode-linux-amd64 --password mypass             # 启用登录（默认用户名 licode）
