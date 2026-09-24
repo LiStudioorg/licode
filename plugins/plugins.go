@@ -16,13 +16,16 @@ var fsToolNames = []string{"Read", "Write", "Edit", "ListDirectory", "Grep", "Gl
 // shellToolNames 是命令执行类工具（builtin-tools-shell 插件注册的部分）。
 var shellToolNames = []string{"Shell"}
 
-// RegisterAll 加载全部内置插件。
+// RegisterAll 加载全部内置插件（不含 llm.config，由宿主 Provide）。
 func RegisterAll(r *cordis.Runtime, shell agent.ShellConfig) error {
-	for _, p := range []cordis.Plugin{
+	plugins := []cordis.Plugin{
 		BuiltinToolsFS(shell),
 		BuiltinToolsShell(shell),
 		BuiltinPermissions(),
-	} {
+		BuiltinLLM(),
+	}
+	plugins = append(plugins, BuiltinLLMProviders()...)
+	for _, p := range plugins {
 		if err := r.Load(p); err != nil {
 			return err
 		}

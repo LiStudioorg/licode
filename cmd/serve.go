@@ -206,7 +206,7 @@ func runServe(opts *ServeOptions) error {
 		defer rt.Shutdown()
 	}
 
-	client, err := st.settings.NewClient()
+	client, err := st.buildClient(&st.settings)
 	if err != nil {
 		return err
 	}
@@ -224,6 +224,12 @@ func runServe(opts *ServeOptions) error {
 		}
 		log.Printf("客户端已连接（当前 %d 个）", hub.Count())
 		cs := newConnState(settings.SessionsDir())
+		if st.cordis != nil {
+			// 会话落盘前发射 session/pre-save，插件可就地补充元数据/裁剪上下文。
+			cs.sessions.PreSave = func(sess *session.Session) {
+				st.cordis.Emit(cordis.EventSessionPreSave, sess)
+			}
+		}
 
 		c.OnUserMessage(func(ctx context.Context, msg websocket.ClientMessage) {
 			switch msg.Type {
@@ -754,6 +760,22 @@ func runServe(opts *ServeOptions) error {
 	return nil
 }
 
+// buildClient 通过 Cordis 插件树构造当前 LLM 客户端：把 AI 配置作为
+// llm.config 服务提供，builtin-llm 编排器据此选择协议工厂产出 llm 服务。
+// 配置替换即触发 Provider 热切换（旧客户端注销、依赖方级联失效后自动恢复）。
+// 插件树不可用时回退直接构造，行为与改造前一致。
+func (st *serverState) buildClient(s *settings.Settings) (ai.LLMClient, error) {
+	if rt := st.cordis; rt != nil {
+		rt.Provide(cordis.ServiceLLMConfig, s.AIConfig())
+		if v, ok := rt.Get(cordis.ServiceLLM); ok {
+			if lc, ok := v.(ai.LLMClient); ok {
+				return lc, nil
+			}
+		}
+	}
+	return s.NewClient()
+}
+
 // applyServerSettings 校验并应用新的设置，重建客户端。
 func applyServerSettings(st *serverState, msg websocket.ClientMessage) error {
 	// msg.Settings 已是反序列化后的结构，直接转换，无需再 Marshal/Unmarshal 一轮。
@@ -773,7 +795,7 @@ func applyServerSettings(st *serverState, msg websocket.ClientMessage) error {
 	if err := s.Validate(); err != nil {
 		return fmt.Errorf("设置无效: %v", err)
 	}
-	client, err := s.NewClient()
+	client, err := st.buildClient(&s)
 	if err != nil {
 		return err
 	}
@@ -792,7 +814,7 @@ func reloadServerSettings(st *serverState) error {
 	if err != nil {
 		return err
 	}
-	client, err := s.NewClient()
+	client, err := st.buildClient(&s)
 	if err != nil {
 		return err
 	}
@@ -822,8 +844,10 @@ func runServerAgentWithAttachments(ctx context.Context, st *serverState, cs *con
 
 	ag := s.BuildAgent(client)
 	if st.toolReg != nil {
-		// 工具执行走 cordis 管道（权限/审计由插件监听器处理）。
+		// 工具执行走 cordis 管道（权限/审计由插件监听器处理），
+		// 主循环事件也发射到同一运行时。
 		ag.Pipeline = st.toolReg
+		ag.Cordis = st.cordis
 	}
 	if roleSystem != "" {
 		ag.System = roleSystem + "\n" + ag.System

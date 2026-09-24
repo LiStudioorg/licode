@@ -27,6 +27,9 @@ type Manager struct {
 	order    []string
 	current  string
 	seq      int
+	// PreSave 在 SaveSession/SaveAll 落盘前对会话做最后加工
+	// （对应 session/pre-save waterfall 事件）。钩子内禁止回调 Manager 方法。
+	PreSave func(*Session)
 }
 
 // NewManager 创建会话管理器。dir 为对话记录目录（~/.licode/sessions），
@@ -121,6 +124,9 @@ func (m *Manager) SaveAll() error {
 	defer m.mu.Unlock()
 	var firstErr error
 	for id, s := range m.sessions {
+		if m.PreSave != nil {
+			m.PreSave(s)
+		}
 		if err := s.SaveToFile(filepath.Join(m.dir, id+".json")); err != nil && firstErr == nil {
 			firstErr = err
 		}
@@ -137,6 +143,9 @@ func (m *Manager) SaveSession(id string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if s, ok := m.sessions[id]; ok {
+		if m.PreSave != nil {
+			m.PreSave(s)
+		}
 		return s.SaveToFile(filepath.Join(m.dir, id+".json"))
 	}
 	return nil

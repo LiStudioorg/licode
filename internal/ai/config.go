@@ -135,17 +135,34 @@ func New(cfg Config) (LLMClient, error) {
 	if err := cfg.Resolve(); err != nil {
 		return nil, err
 	}
-	name := cfg.Provider
 	switch cfg.Type {
 	case "openai":
-		return &OpenAIProvider{name: name, baseURL: cfg.BaseURL, apiKey: cfg.APIKey, model: cfg.Model, retry: cfg.RetryMax, dns: cfg.DNS}, nil
+		return NewOpenAI(cfg)
 	case "claude":
-		return &ClaudeProvider{name: name, baseURL: cfg.BaseURL, apiKey: cfg.APIKey, model: cfg.Model, retry: cfg.RetryMax, dns: cfg.DNS}, nil
+		return NewClaude(cfg)
 	case "ollama":
-		return &OllamaProvider{name: name, baseURL: cfg.BaseURL, model: cfg.Model, retry: cfg.RetryMax, dns: cfg.DNS}, nil
+		return NewOllama(cfg)
 	case "google", "gemini":
-		return &GeminiProvider{name: name, baseURL: cfg.BaseURL, apiKey: cfg.APIKey, model: cfg.Model, retry: cfg.RetryMax, dns: cfg.DNS}, nil
+		return NewGemini(cfg)
 	default:
 		return nil, fmt.Errorf("unsupported protocol type %q", cfg.Type)
 	}
+}
+
+// NewOpenAI / NewClaude / NewOllama / NewGemini 是各协议的独立构造器，
+// 供 plugins/builtin-llm-* 作为工厂注册；cfg 必须已通过 Resolve。
+func NewOpenAI(cfg Config) (LLMClient, error) {
+	return &OpenAIProvider{name: cfg.Provider, baseURL: cfg.BaseURL, apiKey: cfg.APIKey, model: cfg.Model, retry: cfg.RetryMax, dns: cfg.DNS}, nil
+}
+
+func NewClaude(cfg Config) (LLMClient, error) {
+	return &ClaudeProvider{name: cfg.Provider, baseURL: cfg.BaseURL, apiKey: cfg.APIKey, model: cfg.Model, retry: cfg.RetryMax, dns: cfg.DNS}, nil
+}
+
+func NewOllama(cfg Config) (LLMClient, error) {
+	return &OllamaProvider{name: cfg.Provider, baseURL: cfg.BaseURL, model: cfg.Model, retry: cfg.RetryMax, dns: cfg.DNS}, nil
+}
+
+func NewGemini(cfg Config) (LLMClient, error) {
+	return &GeminiProvider{name: cfg.Provider, baseURL: cfg.BaseURL, apiKey: cfg.APIKey, model: cfg.Model, retry: cfg.RetryMax, dns: cfg.DNS}, nil
 }

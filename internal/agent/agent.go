@@ -378,6 +378,9 @@ type Agent struct {
 	// Pipeline 非空时工具执行改走 cordis 工具管道（waterfall：权限/审计/脱敏
 	// 由插件监听器处理，Agent 不再本地判断权限）；为空保持旧内联逻辑。
 	Pipeline *cordis.ToolRegistry
+	// Cordis 非空时主循环在 LLM 调用前后发射 agent/pre-step、agent/post-step
+	// waterfall 事件，供插件审计/改写；为空不发射。
+	Cordis *cordis.Runtime
 	// mcpMgr 由 BuildAgent 装配的 MCP 连接管理器；一次运行结束后由调用方
 	// 通过 Close 释放，避免 stdio 子进程泄漏。
 	mcpMgr *MCPManager
@@ -465,6 +468,18 @@ func (a *Agent) RunWithAttachments(ctx context.Context, input string, attachment
 			MaxTokens:   a.MaxTokens,
 			Temperature: a.Temperature,
 		}
+		// waterfall 节点 agent/pre-step：插件可改写 system prompt/消息/工具目录。
+		if a.Cordis != nil {
+			out, werr := a.Cordis.Waterfall(cordis.EventAgentPreStep,
+				StepInput{Iteration: iter, System: req.System, Messages: req.Messages, Tools: req.Tools}, nil)
+			if werr != nil {
+				onEvent(Event{Type: EventError, Error: werr.Error()})
+				return werr
+			}
+			if si, ok := out.(StepInput); ok {
+				req.System, req.Messages, req.Tools = si.System, si.Messages, si.Tools
+			}
+		}
 
 		asst = ai.Message{}
 		asst.Role = ai.RoleAssistant
@@ -498,6 +513,19 @@ func (a *Agent) RunWithAttachments(ctx context.Context, input string, attachment
 			return callErr
 		}
 		_ = done
+
+		// waterfall 节点 agent/post-step：插件可审计/改写助手消息后再入库。
+		if a.Cordis != nil {
+			out, werr := a.Cordis.Waterfall(cordis.EventAgentPostStep,
+				StepOutput{Iteration: iter, Message: asst}, nil)
+			if werr != nil {
+				onEvent(Event{Type: EventError, Error: werr.Error()})
+				return werr
+			}
+			if so, ok := out.(StepOutput); ok {
+				asst = so.Message
+			}
+		}
 
 		a.Session.Add(asst)
 

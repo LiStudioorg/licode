@@ -153,8 +153,18 @@ out, err := reg.Execute(ctx, "Read", map[string]any{"path": "main.go"})
    处理 deny/ask/plan 只读；策略经 `agent.RunHooks`（Go context）透传
    （`Agent.RunWithAttachments` 自动注入 `Permissions/Mode/Ask/AutoAllowPaths`）。
    脱敏暂保留在 Run 循环（`RedactSecrets` 幂等，可平滑迁到 post 监听器）。
-4. ⬜ `builtin-llm-*` 接管 `ai.LLMClient` 构造；删掉 `settings.BuildAgent` 里的 switch。
-5. ⬜ `builtin-agent-loop` 把 `Agent.Run` 的事件点改成 waterfall 发射。
+4. ✅ `builtin-llm-*` Provider 工厂插件：每个协议（openai/claude/ollama/gemini）
+   把构造器注册为 `llm.factory.<type>` 服务；`builtin-llm` 编排器 Inject
+   `llm.config` 后**动态 Inject** 对应工厂——配置替换或工厂插件下线都会级联
+   注销 `llm` 服务并自动重建（`serve.buildClient`：设置保存/SIGHUP 热重载
+   即 Provider 热切换）。`ai.New` 保留为兼容入口。
+5. ✅ waterfall 节点打通：`Agent.Cordis` 非空时循环发射 `agent/pre-step`
+   （`StepInput`：改写 System/Messages/Tools 后进请求）与 `agent/post-step`
+   （`StepOutput`：改写后再入库）；会话管理器新增 `PreSave` 钩子，serve 接线
+   `session/pre-save`（payload 为 `*session.Session`，监听器就地加工）。
+
+阶段二全部完成。后续（阶段三）：`~/.licode/plugins/` 外部进程插件经
+MCPPlugin 适配器接入同一棵插件树。
 
 ## 5. 第三方（外部进程）插件协议（阶段三）
 

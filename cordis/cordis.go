@@ -44,6 +44,12 @@ const (
 	ServiceCordis = "cordis"
 	// ServiceTools 指向 ToolRegistry，注入它的插件可执行/枚举工具。
 	ServiceTools = "tools"
+	// ServiceLLM 指向当前生效的 ai.LLMClient（Provider 热切换的目标服务）。
+	ServiceLLM = "llm"
+	// ServiceLLMConfig 指向当前生效的 ai.Config（LLM 编排器的输入）。
+	ServiceLLMConfig = "llm.config"
+	// ServiceLLMFactoryPrefix + 协议类型 = 各 Provider 工厂服务名。
+	ServiceLLMFactoryPrefix = "llm.factory."
 )
 
 // 事件总线上约定的 waterfall 事件名。
