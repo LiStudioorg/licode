@@ -204,6 +204,15 @@ func runServe(opts *ServeOptions) error {
 		st.cordis, st.toolReg = nil, nil
 	} else {
 		defer rt.Shutdown()
+		// 第三方外部进程插件（~/.licode/plugins/<name>/plugin.json）：
+		// 经 MCPPlugin 适配器接入同一棵插件树，崩溃隔离、坏清单只告警。
+		loaded, warns := plugins.RegisterExternalAll(rt, settings.PluginsDir())
+		if len(loaded) > 0 {
+			log.Printf("外部插件已加载: %s", strings.Join(loaded, ", "))
+		}
+		for _, w := range warns {
+			log.Printf("外部插件: %s", w)
+		}
 	}
 
 	client, err := st.buildClient(&st.settings)

@@ -35,6 +35,7 @@ type MCPServer struct {
 	Command string   `json:"command"`
 	Args    []string `json:"args"`
 	URL     string   `json:"url"`
+	Cwd     string   `json:"cwd"` // stdio 子进程工作目录（空则继承当前目录）
 }
 
 func (s MCPServer) IsHTTP() bool {
@@ -149,9 +150,10 @@ type stdioConn struct {
 	mu      sync.Mutex
 	pending map[int]chan json.RawMessage
 	nextID  int
-	stdin   *bufio.Writer
-	stdout  *bufio.Reader
-	closeCh chan struct{}
+	stdin     *bufio.Writer
+	stdout    *bufio.Reader
+	closeCh   chan struct{}
+	closeOnce sync.Once
 }
 
 func newStdioConn(ctx context.Context, s MCPServer) (*stdioConn, error) {
@@ -160,6 +162,9 @@ func newStdioConn(ctx context.Context, s MCPServer) (*stdioConn, error) {
 		return nil, err
 	}
 	cmd := exec.Command(bin, s.Args...)
+	if s.Cwd != "" {
+		cmd.Dir = s.Cwd
+	}
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return nil, fmt.Errorf("stdin pipe: %w", err)
@@ -202,7 +207,10 @@ func (c *stdioConn) init(parent context.Context) error {
 }
 
 // readLoop 持续从 stdout 读取 Content-Length 帧或 NDJSON，分发到 pending。
+// 连接断开（子进程崩溃/EOF）时调用 close()：让挂起的 call 立刻收到关闭错误，
+// 而不是等 30s 超时——这是外部插件/子进程崩溃隔离的关键路径。
 func (c *stdioConn) readLoop() {
+	defer c.close()
 	for {
 		select {
 		case <-c.closeCh:
@@ -343,16 +351,13 @@ func (c *stdioConn) write(id int, method string, params any, notify bool) error 
 }
 
 func (c *stdioConn) close() {
-	select {
-	case <-c.closeCh:
-		return
-	default:
+	c.closeOnce.Do(func() {
 		close(c.closeCh)
-	}
-	if c.cmd != nil && c.cmd.Process != nil {
-		_ = c.cmd.Process.Kill()
-		_, _ = c.cmd.Process.Wait()
-	}
+		if c.cmd != nil && c.cmd.Process != nil {
+			_ = c.cmd.Process.Kill()
+			_, _ = c.cmd.Process.Wait()
+		}
+	})
 }
 
 // ---- HTTP 连接 ----

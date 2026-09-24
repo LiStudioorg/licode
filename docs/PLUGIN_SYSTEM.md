@@ -164,10 +164,10 @@ func Apply(ctx cordis.Context) error {
 
 ## 六、分阶段实施
 
-- **阶段一（进行中）**：`cordis/` 包完整实现 Context、Fiber、Effect、Injector、EventBus。验收：卸载/加载插件即可切换 AI Provider，无需重启。
-- **阶段二**：`plugins/` 内置插件化，main() 精简为运行时引导。
-- **阶段三**：MCPPlugin 适配器接入 `~/.licode/plugins/` 外部进程插件，崩溃隔离。
-- **阶段四（按需）**：Bundle/Profile 组装层。
+- **阶段一（✅ 完成）**：`cordis/` 包完整实现 Context、Fiber、Effect、Injector、EventBus。验收：卸载/加载插件即可切换 AI Provider，无需重启。
+- **阶段二（✅ 完成）**：`plugins/` 内置插件化（tools-fs / tools-shell / permissions / llm-* + llm 编排器），`cmd/serve.go` 引导运行时，Agent 主循环接入 `agent/pre-step`、`agent/post-step`、`session/pre-save` waterfall。
+- **阶段三（✅ 完成）**：`plugins/external.go` MCPPlugin 适配器接入 `~/.licode/plugins/` 外部进程插件，清单宽松解析 + 崩溃隔离（握手失败/运行期崩溃/卸载均不影响核心）。详见 `docs/PLUGIN_DEV.md` 第 5 节。
+- **阶段四（按需）**：Bundle/Profile 组装层。licode 目前仅 Web 形态，暂缓。
 
 ## 七、关键设计决策
 

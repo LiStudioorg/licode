@@ -166,19 +166,88 @@ out, err := reg.Execute(ctx, "Read", map[string]any{"path": "main.go"})
 阶段二全部完成。后续（阶段三）：`~/.licode/plugins/` 外部进程插件经
 MCPPlugin 适配器接入同一棵插件树。
 
-## 5. 第三方（外部进程）插件协议（阶段三）
+## 5. 第三方（外部进程）插件协议（阶段三 ✅ 已实现）
 
 ```
 ~/.licode/plugins/<name>/
-├── plugin.json     # name/version/entry/inject/provide/permissions/auto_start
-└── <entry>         # 可执行文件，stdio 上跑 MCP JSON-RPC
+├── plugin.json     # 清单（见下）
+└── <entry>         # 可执行文件或解释器脚本，stdio 上跑 MCP JSON-RPC
 ```
 
-- 核心用 `MCPPlugin` 适配器包装：`Apply` 时拉起进程（经 `internal/procutil`），
-  `tools/list` 结果逐个转成 `ctx.RegisterTool`，`tools/call` 路由到子进程；
-  进程崩溃 → 适配器 `return err` → Fiber 回滚工具，核心不受影响。
-- manifest 的 `inject` 在核心侧生效（服务不齐则插件不启动）。
-- 用户手动配置的 MCP Server 保持原逻辑不变；插件 = 有 manifest/依赖/权限的 MCP Server 超集。
+`plugin.json`（宽松解析，未知字段忽略）：
+
+```json
+{
+  "name": "git-helper",
+  "version": "1.0.0",
+  "entry": "./git-helper",
+  "args": [],
+  "description": "Git 操作辅助工具",
+  "inject": ["llm"],
+  "provide": ["git_service"],
+  "permissions": ["shell:git", "file:read"],
+  "auto_start": true
+}
+```
+
+- **标识以目录名为准**（`name` 仅作显示名）；插件在插件树中的 Fiber 名为
+  `ext-<目录名>`，其工具沿用 MCP 命名 `mcp__<目录名>__<tool>`。
+- `entry` 含路径分隔符时相对插件目录解析并确保可执行；裸命令名（如 `python3`）
+  按 PATH 解析，`args` 传参，子进程工作目录 = 插件目录。
+- 工具发现：握手后调用 MCP `tools/list` 动态枚举，无需在清单重复定义。
+  若发现 0 工具且无 `provide`，视为无效插件（跳过并告警）。
+- `inject` 在核心侧生效（依赖服务不齐则插件保持 PENDING）。
+- `permissions` 兼容字符串数组或对象（旧格式），当前仅作声明，
+  实际权限由 `builtin-permissions` 依据 `ext-<name>` 工具名统一管理。
+
+最小可用的 Python 插件（stdio MCP，单文件即可）：
+
+```python
+#!/usr/bin/env python3
+import json, sys
+
+def read_msg():
+    line = sys.stdin.buffer.readline()
+    if not line: return None
+    if line.lstrip().startswith(b"{"): return json.loads(line)
+    hdr = {}
+    while line not in (b"\r\n", b"\n", b""):
+        k, _, v = line.decode().partition(":"); hdr[k.strip().lower()] = v.strip()
+        line = sys.stdin.buffer.readline()
+    return json.loads(sys.stdin.buffer.read(int(hdr.get("content-length", "0"))))
+
+def send(rid, result):
+    b = json.dumps({"jsonrpc": "2.0", "id": rid, "result": result}).encode()
+    sys.stdout.buffer.write(b"Content-Length: %d\r\n\r\n" % len(b) + b); sys.stdout.buffer.flush()
+
+while True:
+    m = read_msg()
+    if m is None: break
+    rid, method = m.get("id"), m.get("method")
+    if rid is None: continue
+    if method == "initialize":
+        send(rid, {"protocolVersion": "2024-11-05", "capabilities": {"tools": {}},
+                   "serverInfo": {"name": "git-helper", "version": "1.0.0"}})
+    elif method == "tools/list":
+        send(rid, {"tools": [{"name": "status", "description": "git status",
+               "inputSchema": {"type": "object"}}]})
+    elif method == "tools/call":
+        # 执行真实逻辑，返回 MCP content 数组
+        send(rid, {"content": [{"type": "text", "text": "...output..."}]})
+    else:
+        send(rid, {})
+```
+
+### 崩溃隔离
+
+- 子进程握手失败 → 插件 `Apply` 返回错误 → Fiber 回滚，只记录告警，核心与其他插件不受影响。
+- 运行期子进程崩溃 → stdio `readLoop` 退出即触发连接关闭，挂起的 `tools/call`
+  立即返回错误（不再等 30s 超时），核心无感。
+- 卸载（或 `rt.Shutdown()`）→ 框架自动关闭 MCP 连接并 kill 子进程（幂等）。
+
+> 注：`~/.licode/plugins/sample` 是上一代插件系统遗留（工具写在 `contributes.tools`、
+> 未实现 MCP `tools/list`，且脚本含语法错误）。新系统以 `tools/list` 为准，
+> 该样例会被判定为“0 工具”而跳过。需要示例请复制上面的最小 Python 插件。
 
 ## 6. 已验证行为（`cordis/cordis_test.go`）
 

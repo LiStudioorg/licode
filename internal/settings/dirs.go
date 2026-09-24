@@ -17,6 +17,7 @@ import (
 //	~/.licode/logs/         日志
 //	~/.licode/cache/        缓存
 //	~/.licode/md/           附加提示词（自动读取其中所有 .md，默认空）
+//	~/.licode/plugins/      第三方外部进程插件（plugin.json + 可执行文件）
 func BaseDir() string {
 	if v := os.Getenv("LICODE_HOME"); v != "" {
 		return v
@@ -40,6 +41,7 @@ func LogsDir() string        { return filepath.Join(BaseDir(), "logs") }
 func CacheDir() string       { return filepath.Join(BaseDir(), "cache") }
 func MDPromptDir() string    { return filepath.Join(BaseDir(), "md") }
 func ToolsDir() string       { return filepath.Join(BaseDir(), "tools") }
+func PluginsDir() string     { return filepath.Join(BaseDir(), "plugins") }
 
 // SystemPromptPath 系统提示词文件（可直接编辑生效）。
 func SystemPromptPath() string { return filepath.Join(BaseDir(), "system-prompt.md") }
@@ -55,7 +57,7 @@ func ReadSystemPrompt() string {
 
 // EnsureDirs 创建用户数据目录与子目录（首次使用自动生成）。
 func EnsureDirs() error {
-	dirs := []string{BaseDir(), SkillsDir(), MCPDir(), SessionsDir(), LogsDir(), CacheDir(), MDPromptDir(), ToolsDir()}
+	dirs := []string{BaseDir(), SkillsDir(), MCPDir(), SessionsDir(), LogsDir(), CacheDir(), MDPromptDir(), ToolsDir(), PluginsDir()}
 	for _, d := range dirs {
 		if err := os.MkdirAll(d, 0o755); err != nil {
 			return err
