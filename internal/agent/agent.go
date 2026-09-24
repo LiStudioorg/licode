@@ -50,15 +50,15 @@ const (
 
 // Event is a UI-agnostic stream event.
 type Event struct {
-	Type      EventType `json:"type"`
-	Content   string    `json:"content,omitempty"`
-	ToolName  string    `json:"toolName,omitempty"`
-	ToolArgs  string    `json:"toolArgs,omitempty"`
-	ToolOut   string    `json:"toolOut,omitempty"`
-	Error     string    `json:"error,omitempty"`
-	Settings  any       `json:"settings,omitempty"`
-	AskID     string    `json:"askId,omitempty"`
-	SessionID string    `json:"sessionId,omitempty"`
+	Type      EventType   `json:"type"`
+	Content   string      `json:"content,omitempty"`
+	ToolName  string      `json:"toolName,omitempty"`
+	ToolArgs  string      `json:"toolArgs,omitempty"`
+	ToolOut   string      `json:"toolOut,omitempty"`
+	Error     string      `json:"error,omitempty"`
+	Settings  any         `json:"settings,omitempty"`
+	AskID     string      `json:"askId,omitempty"`
+	SessionID string      `json:"sessionId,omitempty"`
 	Stats     *TokenStats `json:"stats,omitempty"`
 }
 
@@ -371,7 +371,7 @@ type Agent struct {
 	PromptDir string
 	// SpillDir/SpillLimit：超长工具结果溢出落盘（三层裁剪管道第 1 层）。
 	// SpillLimit<=0 关闭溢出。
-	SpillDir  string
+	SpillDir   string
 	SpillLimit int
 	// ContextExtra 额外注入 C 区尾部的上下文（如 RAG 检索片段），不污染冻结前缀。
 	ContextExtra string
@@ -381,6 +381,12 @@ type Agent struct {
 	// Cordis 非空时主循环在 LLM 调用前后发射 agent/pre-step、agent/post-step
 	// waterfall 事件，供插件审计/改写；为空不发射。
 	Cordis *cordis.Runtime
+	// NoContextTail 关闭 C 区尾部注入（日期/用量/模式）。子代理用：它们是聚焦的
+	// 独立会话，主 Agent 的日期/token 用量对子任务是噪声且纯耗 token，故不注入。
+	NoContextTail bool
+	// PromptCache 请求 Provider 显式缓存稳定前缀（目前 Claude: cache_control）。
+	// 由 settings.BuildAgent 依据设置置位；关闭时行为与旧版逐字节一致。
+	PromptCache bool
 	// mcpMgr 由 BuildAgent 装配的 MCP 连接管理器；一次运行结束后由调用方
 	// 通过 Close 释放，避免 stdio 子进程泄漏。
 	mcpMgr *MCPManager
@@ -457,8 +463,10 @@ func (a *Agent) RunWithAttachments(ctx context.Context, input string, attachment
 		// 三层裁剪管道第 2 层：纯尾部截断（丢最旧、保最新、清理孤儿 tool 消息）。
 		msgs := a.Session.MessagesForLLM(a.System)
 		// 第 3 层：把 C 区易变信息（日期/用量/模式提示词/RAG）并入最后一条 user 消息，
-		// 系统前缀保持字节冻结，稳定命中 Provider 前缀缓存。
-		msgs = mergeContextTail(msgs, a.envContext())
+		// 系统前缀保持字节冻结，稳定命中 Provider 前缀缓存。子代理关闭该注入。
+		if !a.NoContextTail {
+			msgs = mergeContextTail(msgs, a.envContext())
+		}
 		a.requests++
 		req := ai.ChatRequest{
 			Model:       a.Model,
@@ -467,6 +475,7 @@ func (a *Agent) RunWithAttachments(ctx context.Context, input string, attachment
 			Tools:       a.visibleTools(),
 			MaxTokens:   a.MaxTokens,
 			Temperature: a.Temperature,
+			PromptCache: a.PromptCache,
 		}
 		// waterfall 节点 agent/pre-step：插件可改写 system prompt/消息/工具目录。
 		if a.Cordis != nil {

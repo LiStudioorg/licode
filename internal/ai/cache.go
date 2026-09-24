@@ -24,7 +24,8 @@ type Cache struct {
 	ttl  time.Duration
 	mu   sync.Mutex
 	mem  map[string]cacheEntry
-	miss int // 抖动统计（可选）
+	wg   sync.WaitGroup // 追踪未落盘的异步写，供 Flush 等待
+	miss int            // 抖动统计（可选）
 }
 
 type cacheEntry struct {
@@ -118,7 +119,9 @@ func (c *Cache) Put(key, content string) {
 	dir := c.dir
 	c.mu.Unlock()
 	// 异步落盘，避免阻塞主流程
+	c.wg.Add(1)
 	go func() {
+		defer c.wg.Done()
 		path := filepath.Join(dir, key+".json")
 		_ = os.MkdirAll(dir, 0o755)
 		data, err := json.Marshal(cacheEntry{key: key, content: content, createdAt: time.Now()})
@@ -127,6 +130,10 @@ func (c *Cache) Put(key, content string) {
 		}
 	}()
 }
+
+// Flush 等待所有未落盘的异步写完成。进程退出/Keep-TempDir 复用等场景可调用，
+// 避免竞态（如目录先于写被清理）。
+func (c *Cache) Flush() { c.wg.Wait() }
 
 func (c *Cache) readDisk(key string) (string, error) {
 	path := filepath.Join(c.dir, key+".json")

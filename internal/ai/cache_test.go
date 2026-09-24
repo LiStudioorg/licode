@@ -28,6 +28,8 @@ func (f *fakeClient) ListModels(ctx context.Context) ([]string, error) { return 
 func TestCacheHit(t *testing.T) {
 	inner := &fakeClient{}
 	cache := NewCache(t.TempDir(), 3600)
+	// 异步落盘与 TempDir 清理存在竞态：先等待落盘完成再删目录。
+	t.Cleanup(cache.Flush)
 	c := CacheDecorator(inner, cache)
 
 	req := ChatRequest{

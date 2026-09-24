@@ -109,6 +109,10 @@ func (s *Settings) mergeFrom(o *Settings) {
 	if o.CacheTTL != 0 {
 		s.CacheTTL = o.CacheTTL
 	}
+	s.PromptCache = o.PromptCache
+	if o.KeepaliveSec != 0 {
+		s.KeepaliveSec = o.KeepaliveSec
+	}
 	s.ToolAutoRetry = o.ToolAutoRetry
 	if o.ToolRetryMax != 0 {
 		s.ToolRetryMax = o.ToolRetryMax
