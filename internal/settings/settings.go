@@ -5,9 +5,10 @@ package settings
 import (
 	"errors"
 	"net/url"
+	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
-	"time"
 
 	"licode/internal/agent"
 	"licode/internal/ai"
@@ -288,14 +289,29 @@ func (s *Settings) BuildAgent(client ai.LLMClient) *agent.Agent {
 	if pc.Provider == "" {
 		modelID = modelName
 	}
-	prompt := agent.BuildMainPrompt(agent.WorkspaceRoot(), runtime.GOOS, time.Now().Format("2006-01-02"), modelName, modelID)
-	ag := agent.NewAgent(client, prompt)
+	// A/B 区冻结锚：系统前缀在会话内字节恒定（不含日期等易变值），稳定命中 Provider
+	// 前缀缓存。附加提示词进 A 区、环境快照进 B 区；日期/用量/模式/RAG 由 C 区尾部追加。
+	cwd := agent.WorkspaceRoot()
+	promptDir := filepath.Join(BaseDir(), "prompts")
+	appendPrompt, _ := ReadMDPrompts(MDPromptDir())
+	anchor := agent.BuildAnchor(agent.AnchorOpts{
+		ModelName:      modelName,
+		ModelID:        modelID,
+		Cwd:            cwd,
+		OS:             runtime.GOOS,
+		IsGit:          isGitRepo(cwd),
+		SystemOverride: ReadSystemPrompt(),
+		AppendPrompt:   appendPrompt,
+		ProjectSummary: readProjectSummary(cwd),
+		PromptDir:      promptDir,
+	})
+	ag := agent.NewAgent(client, anchor.System)
+	ag.SysHash = anchor.Hash
+	ag.PromptDir = promptDir
+	ag.SpillDir = filepath.Join(CacheDir(), "spills")
+	ag.SpillLimit = spillLimitBytes
 	// 特性6：把 fsnotify 热加载的外部命令工具并入当前 Agent（动态增/删）。
 	ag.Tools.MergeFrom(agent.ExternalTools)
-	// 附加提示词：~/.licode/md/ 下的所有 .md（默认空）
-	if md, err := ReadMDPrompts(MDPromptDir()); err == nil && md != "" {
-		ag.System += "\n" + md
-	}
 	ag.MaxTokens = s.MaxTokens
 	ag.MaxIterations = s.MaxIterations
 	ag.Temperature = s.Temperature
@@ -534,4 +550,40 @@ func (s *Settings) RestoreMaskedKeys(prev Settings) {
 			}
 		}
 	}
+}
+
+// spillLimitBytes 是单个工具结果进入会话历史前的字符上限；超出即溢出落盘、
+// 只留有界预览（三层裁剪管道第 1 层）。取值兼顾“够模型看到关键上下文”与
+// “不让一次巨量输出长期占用后续每轮预算”。
+const spillLimitBytes = 8000
+
+// isGitRepo 报告给定目录是否为 git 工作树（存在 .git 目录/文件）。
+// 用于 B 区环境快照 IS_GIT（确定性：不含时间/随机）。
+func isGitRepo(dir string) bool {
+	if dir == "" {
+		return false
+	}
+	if _, err := os.Stat(filepath.Join(dir, ".git")); err == nil {
+		return true
+	}
+	return false
+}
+
+// readProjectSummary 读取工作区根目录的 AGENTS.md 作为“项目摘要”注入冻结前缀（A 区）。
+// 与 opencode 读取 AGENTS.md 的行为一致；上限 projectSummaryLimit 字节，避免摘要本身
+// 过大反而抬高每次请求的固定开销。文件不存在或为空时返回空串（跳过该段，不影响其余字节）。
+func readProjectSummary(dir string) string {
+	if dir == "" {
+		return ""
+	}
+	const projectSummaryLimit = 12000
+	data, err := os.ReadFile(filepath.Join(dir, "AGENTS.md"))
+	if err != nil {
+		return ""
+	}
+	s := strings.TrimSpace(string(data))
+	if len(s) > projectSummaryLimit {
+		s = s[:projectSummaryLimit] + "\n...(项目说明过长，已截断)"
+	}
+	return s
 }

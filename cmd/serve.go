@@ -303,6 +303,22 @@ func runServe(opts *ServeOptions) error {
 					c.SendEvent(websocket.ServerEvent{Type: websocket.EvtDone, SessionID: sessID})
 					return
 				}
+				// 运行模式切换（纯后端、无需前端改动）：/plan 只读规划，/build 恢复全工具。
+				if cmd := strings.TrimSpace(msg.Content); cmd == "/plan" || cmd == "/build" {
+					mode := "build"
+					if cmd == "/plan" {
+						mode = "plan"
+					}
+					cs.sessions.Current().SetMode(mode)
+					_ = cs.sessions.SaveAll()
+					note := "已切换到 build 模式（可修改工作区）"
+					if mode == "plan" {
+						note = "已切换到 plan 模式（只读：仅可读取/搜索，不能修改文件）"
+					}
+					c.SendEvent(websocket.ServerEvent{Type: websocket.EvtDelta, Content: note, SessionID: sessID})
+					c.SendEvent(websocket.ServerEvent{Type: websocket.EvtDone, SessionID: sessID})
+					return
+				}
 				// busy 按会话隔离：A 对话处理中时，B 对话仍可并发跑 Agent。
 				cs.mu.Lock()
 				if cs.busy[sessID] {
@@ -791,6 +807,8 @@ func runServerAgentWithAttachments(ctx context.Context, st *serverState, cs *con
 		ag.System = roleSystem + "\n" + ag.System
 	}
 	ag.Session = sess
+	// 运行模式来自会话（/plan 只读、/build 全工具），默认 build。
+	ag.Mode = sess.Mode()
 	// MaxCtxTokens 必须落在真实会话上（BuildAgent 里的临时会话已被上面的
 	// 赋值覆盖，若不重设则上下文窗口保护会静默失效）。
 	if s.MaxCtxTokens > 0 {
@@ -832,7 +850,9 @@ func runServerAgentWithAttachments(ctx context.Context, st *serverState, cs *con
 	}
 	if s.RAGEnabled {
 		if snippets := st.ragLookup(content, s.RAGSource, s.RAGTopFiles); snippets != "" {
-			ag.System += "\n\n以下是用户当前项目中的相关源码片段（来自 RAG 检索），" +
+			// RAG 片段属易变上下文，注入 C 区尾部（并入最后一条 user 消息），
+			// 不追加到 ag.System，以免破坏冻结前缀、抬高前缀缓存失效成本。
+			ag.ContextExtra = "以下是用户当前项目中的相关源码片段（来自 RAG 检索），" +
 				"请优先据此准确回答，不要编造不存在的内容：\n" + snippets
 		}
 	}
@@ -861,9 +881,14 @@ func runServerAgentWithAttachments(ctx context.Context, st *serverState, cs *con
 			c.SendEvent(websocket.ServerEvent{Type: websocket.EvtReasoning, Content: e.Content, SessionID: sessID})
 		} else if e.Type == agent.EventStatus {
 			c.SendEvent(websocket.ServerEvent{Type: websocket.EvtStatus, Content: e.Content, SessionID: sessID})
+		} else if e.Type == agent.EventStats {
+			c.SendEvent(websocket.ServerEvent{Type: websocket.EvtStats, Stats: e.Stats, SessionID: sessID})
 		}
 		return nil
 	})
+	// 把本次运行的 token 用量（含缓存命中）累计到会话并落盘，
+	// 之前 ag.Usage 只在内存里累加、从不回写，导致会话/前端看不到用量。
+	sess.AddUsage(ag.Usage)
 }
 
 // autoTitle 从第一条用户消息生成对话标题。
