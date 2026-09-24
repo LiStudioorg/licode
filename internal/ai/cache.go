@@ -202,11 +202,18 @@ func (c *cachedClient) ChatStream(ctx context.Context, req ChatRequest, onEvent 
 }
 
 // lastUser 取最后一个 user 消息文本，作为缓存键的一部分。
+// 会剥离 C 区尾部并入的 <context>…</context> 块（内含日期/用量/模式等易变信息），
+// 否则每次请求的缓存键都会随 token 用量漂移，语义缓存永远命中不了。
 func lastUser(messages []Message) string {
 	for i := len(messages) - 1; i >= 0; i-- {
-		if messages[i].Role == "user" {
-			return messages[i].Content
+		if messages[i].Role != "user" {
+			continue
 		}
+		c := messages[i].Content
+		if idx := strings.Index(c, "\n\n<context>"); idx >= 0 {
+			c = c[:idx]
+		}
+		return c
 	}
 	return ""
 }

@@ -36,6 +36,7 @@ type Session struct {
 	maxTok      int
 	summary     string
 	usage       ai.Usage // 累计 token 用量（含缓存读取）
+	mode        string   // 运行模式：build/plan（plan=只读）；空按 build 处理
 	onChange    func()
 	alwaysAllow map[string]bool
 }
@@ -139,6 +140,30 @@ func (s *Session) SetSummary(v string) {
 	s.summary = v
 }
 
+// Mode 返回会话运行模式（"" 视为 "build"）。
+func (s *Session) Mode() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.mode == "" {
+		return "build"
+	}
+	return s.mode
+}
+
+// SetMode 设置会话运行模式（build/plan），并触发落盘。
+func (s *Session) SetMode(m string) {
+	if m != "build" && m != "plan" {
+		return
+	}
+	s.mu.Lock()
+	s.mode = m
+	onChange := s.onChange
+	s.mu.Unlock()
+	if onChange != nil {
+		go onChange()
+	}
+}
+
 func genID() string {
 	b := make([]byte, 16)
 	_, _ = rand.Read(b)
@@ -159,6 +184,7 @@ type fileRecord struct {
 	ID          string       `json:"id"`
 	Title       string       `json:"title"`
 	Summary     string       `json:"summary"`
+	Mode        string       `json:"mode,omitempty"`
 	MaxTok      int          `json:"max_tokens"`
 	Messages    []ai.Message `json:"messages"`
 	Usage       ai.Usage     `json:"usage"`
@@ -168,7 +194,7 @@ type fileRecord struct {
 // SaveToFile 将会话写入磁盘（对话记录）。
 func (s *Session) SaveToFile(path string) error {
 	s.mu.Lock()
-	rec := fileRecord{ID: s.id, Title: s.title, Summary: s.summary, MaxTok: s.maxTok, Usage: s.usage}
+	rec := fileRecord{ID: s.id, Title: s.title, Summary: s.summary, Mode: s.mode, MaxTok: s.maxTok, Usage: s.usage}
 	rec.Messages = make([]ai.Message, len(s.messages))
 	copy(rec.Messages, s.messages)
 	for name, allow := range s.alwaysAllow {
@@ -198,6 +224,7 @@ func LoadSessionFile(path string) (*Session, error) {
 	s.id = rec.ID
 	s.title = rec.Title
 	s.summary = rec.Summary
+	s.mode = rec.Mode
 	s.usage = rec.Usage
 	s.messages = rec.Messages
 	for _, name := range rec.AlwaysAllow {

@@ -1,50 +1,18 @@
 package agent
 
-import (
-	"context"
-	"strings"
+import "context"
 
-	"licode/internal/ai"
-)
-
-// compactIfNeeded 在上下文即将超限时，用 LLM 把较早的对话压缩成摘要，
-// 并修剪掉被摘要覆盖的旧消息（opencode 的 compaction 行为）。
-func (a *Agent) compactIfNeeded(ctx context.Context) {
-	if a.Client == nil || a.Session.Dropped(a.System) <= 0 {
-		return
-	}
-	msgs := a.Session.Messages()
-	if len(msgs) < 4 {
-		return
-	}
-	// 保留最近 40% 作为可继续引用的上下文，其余交给摘要。
-	cut := len(msgs) * 3 / 5
-	if cut >= len(msgs)-2 {
-		cut = len(msgs) - 2
-	}
-	head := msgs[:cut]
-
-	var sb strings.Builder
-	sb.WriteString("请把下面这段旧对话压缩成简洁的简体中文摘要。必须保留：用户的需求、已经做出的修改与涉及文件、关键结论、尚未完成的事项。不要遗漏重要信息：\n\n")
-	for _, m := range head {
-		role := m.Role
-		if role == ai.RoleTool {
-			role = "工具结果(" + m.ToolName + ")"
-		}
-		sb.WriteString(role + ": " + m.Content + "\n")
-	}
-	sum, err := a.Client.Chat(ctx, ai.ChatRequest{
-		Model:     a.Model,
-		System:    "你是对话压缩器，只输出摘要本身，不要额外说明。",
-		Messages:  []ai.Message{{Role: ai.RoleUser, Content: sb.String()}},
-		MaxTokens: 1024,
-	})
-	if err != nil {
-		return
-	}
-	if strings.TrimSpace(sum) == "" {
-		return
-	}
-	a.Session.SetSummary(strings.TrimSpace(sum))
-	a.Session.TrimHead(cut)
+// compactIfNeeded 保留了 Compaction 开关的调用点，但**不再调用 LLM 生成中间摘要**。
+//
+// 旧实现会在上下文接近上限时，把较早的对话喂给模型压缩成摘要再 TrimHead，
+// 这与 Token 优化的两条硬性约束冲突：
+//  1. “禁止中间摘要历史”——摘要文本会插在历史前部，破坏前缀缓存的字节稳定性；
+//  2. 额外一次 LLM 调用本身就是纯消耗（输入 = 大段旧历史）。
+//
+// 取而代之，本函数是确定性的 no-op：真正防溢出由三层裁剪管道负责——
+//   - 第 1 层 spill：超长工具结果在采集时即落盘、只留有界预览；
+//   - 第 2 层 尾部截断：session.MessagesForLLM 丢最旧、保最新并清理孤儿 tool 消息。
+// 两者都不引入非确定性、不额外消耗请求，前缀得以字节冻结。
+func (a *Agent) compactIfNeeded(_ context.Context) {
+	// 故意留空：见上方说明。保留方法以兼容 Compaction 开关与既有调用点。
 }

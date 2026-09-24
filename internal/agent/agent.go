@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -42,6 +43,8 @@ const (
 	EventSettings EventType = "settings"
 	// EventSessions carries the remote session list.
 	EventSessions EventType = "sessions"
+	// EventStats carries a token/cache accounting snapshot.
+	EventStats EventType = "stats"
 )
 
 // Event is a UI-agnostic stream event.
@@ -55,10 +58,13 @@ type Event struct {
 	Settings  any       `json:"settings,omitempty"`
 	AskID     string    `json:"askId,omitempty"`
 	SessionID string    `json:"sessionId,omitempty"`
+	Stats     *TokenStats `json:"stats,omitempty"`
 }
 
-// DefaultMainPrompt 是主 Agent 的系统提示词模板。
-// 运行时变量由 BuildMainPrompt 注入（cwd/平台/日期/模型名）。
+// DefaultMainPrompt 是主 Agent 的系统提示词模板（A/B 区基础层）。
+// 运行时变量由 fillMainTemplate 注入（cwd/平台/是否 git/模型名/模型 ID）。
+// 注意：这里刻意不含“今天日期”等易变值——它们属于 C 区，运行时作为尾部 <context>
+// 块并入最后一条用户消息，从而让这段系统前缀在会话内保持字节冻结、稳定命中前缀缓存。
 const DefaultMainPrompt = `You are Licode, an AI coding agent embedded in a web-based development
 environment. Use the instructions below and the tools available to you to
 assist the user.
@@ -158,22 +164,30 @@ Here is useful information about the environment:
 <env>
 Working directory: {{CWD}}
 Platform: {{OS}}
-Today's date: {{DATE}}
+IsGitRepo: {{IS_GIT}}
 </env>
+
+The current date, running token usage, and active mode are provided in a
+<context> block near the user's latest message; treat those as the authoritative
+runtime values.
 
 Respond in the same language as the user's message.`
 
-// BuildMainPrompt 把运行时变量注入 DefaultMainPrompt 模板：
-// cwd=工作目录，osName=操作系统，date=当日日期，modelName=模型可读名，modelID=模型完整 ID。
-func BuildMainPrompt(cwd, osName, date, modelName, modelID string) string {
-	p := strings.NewReplacer(
+// fillMainTemplate 把 B 区（环境快照）变量注入 DefaultMainPrompt。
+// 与旧的 BuildMainPrompt 的关键区别：不再注入 {{DATE}}。日期改由 C 区尾部提供，
+// 这样系统前缀不会因“跨天/每条消息重算”而改变字节，稳定命中 Provider 前缀缓存。
+func fillMainTemplate(cwd, osName string, isGit bool, modelName, modelID string) string {
+	git := "false"
+	if isGit {
+		git = "true"
+	}
+	return strings.NewReplacer(
 		"{{CWD}}", cwd,
 		"{{OS}}", osName,
-		"{{DATE}}", date,
+		"{{IS_GIT}}", git,
 		"{{MODEL_NAME}}", modelName,
 		"{{MODEL_ID}}", modelID,
 	).Replace(DefaultMainPrompt)
-	return p
 }
 
 // Tool is a registered callable function.
@@ -250,22 +264,48 @@ func (r *Registry) Names() []string {
 	return out
 }
 
-// List returns OpenAI-style tool definitions for the model.
+// List returns OpenAI-style tool definitions for the model, sorted by name.
+// 排序是关键：map 遍历顺序每次随机，会让发给 Provider 的工具序列化每次都不同，
+// 直接击穿前缀缓存。按名字典序输出保证同一工具集产生字节一致的序列化。
 func (r *Registry) List() []ai.Tool {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	out := make([]ai.Tool, 0, len(r.tools))
-	for _, t := range r.tools {
-		out = append(out, ai.Tool{
-			Type: "function",
-			Function: ai.FunctionSpec{
-				Name:        t.Name,
-				Description: t.Description,
-				Parameters:  t.schemaBytes,
-			},
-		})
+	names := make([]string, 0, len(r.tools))
+	for n := range r.tools {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	out := make([]ai.Tool, 0, len(names))
+	for _, n := range names {
+		t := r.tools[n]
+		out = append(out, toolDef(t))
 	}
 	return out
+}
+
+// Subset 按给定名字顺序返回工具定义（调用方保证 names 已排序，从而输出确定）。
+// 名字不存在则跳过。用于按需工具激活（plan 只读子集 / deny 过滤等）。
+func (r *Registry) Subset(names []string) []ai.Tool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	out := make([]ai.Tool, 0, len(names))
+	for _, n := range names {
+		if t, ok := r.tools[n]; ok {
+			out = append(out, toolDef(t))
+		}
+	}
+	return out
+}
+
+func toolDef(t Tool) ai.Tool {
+	return ai.Tool{
+		Type: "function",
+		Function: ai.FunctionSpec{
+			Name:        t.Name,
+			Description: t.Description,
+			Parameters:  t.schemaBytes,
+		},
+	}
 }
 
 // Execute runs a tool by name with JSON-encoded arguments.
@@ -320,6 +360,26 @@ type Agent struct {
 	TraceID string
 	// Usage 累计本次运行消耗的 token（含缓存读取）。
 	Usage ai.Usage
+	// requests 本次运行发起的 LLM 请求次数（供 TokenStats 统计）。
+	requests int
+	// Mode 运行模式：ModeBuild(默认，全工具) / ModePlan(只读)。
+	Mode string
+	// SysHash 冻结系统前缀的 sha256（可观测性：跨消息应恒定）。
+	SysHash string
+	// PromptDir 提示词磁盘覆盖目录（~/.licode/prompts），供 C 区模式提示词读取。
+	PromptDir string
+	// SpillDir/SpillLimit：超长工具结果溢出落盘（三层裁剪管道第 1 层）。
+	// SpillLimit<=0 关闭溢出。
+	SpillDir  string
+	SpillLimit int
+	// ContextExtra 额外注入 C 区尾部的上下文（如 RAG 检索片段），不污染冻结前缀。
+	ContextExtra string
+	// NoContextTail 关闭 C 区尾部注入（日期/用量/模式）。子代理用：它们是聚焦的
+	// 独立会话，主 Agent 的日期/token 用量对子任务是噪声且纯耗 token，故不注入。
+	NoContextTail bool
+	// PromptCache 请求 Provider 显式缓存稳定前缀（目前 Claude: cache_control）。
+	// 由 settings.BuildAgent 依据设置置位；关闭时行为与旧版逐字节一致。
+	PromptCache bool
 	// mcpMgr 由 BuildAgent 装配的 MCP 连接管理器；一次运行结束后由调用方
 	// 通过 Close 释放，避免 stdio 子进程泄漏。
 	mcpMgr *MCPManager
@@ -347,6 +407,7 @@ func NewAgent(client ai.LLMClient, system string) *Agent {
 		MaxIterations: 16,
 		MaxTokens:     4096,
 		Permissions:   map[string]string{},
+		Mode:          ModeBuild,
 	}
 	RegisterDefaultTools(a.Tools, a.Shell)
 	return a
@@ -383,14 +444,22 @@ func (a *Agent) RunWithAttachments(ctx context.Context, input string, attachment
 		if a.Compaction {
 			a.compactIfNeeded(ctx)
 		}
+		// 三层裁剪管道第 2 层：纯尾部截断（丢最旧、保最新、清理孤儿 tool 消息）。
 		msgs := a.Session.MessagesForLLM(a.System)
+		// 第 3 层：把 C 区易变信息（日期/用量/模式提示词/RAG）并入最后一条 user 消息，
+		// 系统前缀保持字节冻结，稳定命中 Provider 前缀缓存。子代理关闭该注入。
+		if !a.NoContextTail {
+			msgs = mergeContextTail(msgs, a.envContext())
+		}
+		a.requests++
 		req := ai.ChatRequest{
 			Model:       a.Model,
 			System:      a.System,
 			Messages:    msgs,
-			Tools:       a.Tools.List(),
+			Tools:       a.visibleTools(),
 			MaxTokens:   a.MaxTokens,
 			Temperature: a.Temperature,
+			PromptCache: a.PromptCache,
 		}
 
 		asst = ai.Message{}
@@ -429,6 +498,7 @@ func (a *Agent) RunWithAttachments(ctx context.Context, input string, attachment
 		a.Session.Add(asst)
 
 		if len(asst.ToolCalls) == 0 {
+			onEvent(Event{Type: EventStats, Stats: snapshotPtr(a.snapshotStats())})
 			onEvent(Event{Type: EventDone})
 			return nil
 		}
@@ -446,6 +516,9 @@ func (a *Agent) RunWithAttachments(ctx context.Context, input string, attachment
 			if a.RedactSecrets {
 				out = RedactSecrets(out)
 			}
+			// 三层裁剪管道第 1 层：超长工具结果溢出落盘，只把有界预览写入会话历史，
+			// 防止单条巨量输出长期占用后续每一轮的上下文预算。
+			out = spillOutput(a.SpillDir, tc.Function.Name, out, a.SpillLimit)
 			args := tc.Function.Arguments
 			if a.RedactSecrets {
 				args = RedactSecrets(args)
@@ -463,9 +536,39 @@ func (a *Agent) RunWithAttachments(ctx context.Context, input string, attachment
 			Content: "TOOL ERROR: reached max iterations without a final answer",
 		})
 	}
+	onEvent(Event{Type: EventStats, Stats: snapshotPtr(a.snapshotStats())})
 	onEvent(Event{Type: EventError, Error: "已达最大迭代次数，未得到最终回答"})
 	return errors.New("max iterations reached without a final answer")
 }
+
+// envContext 组装 C 区易变上下文（每轮重算，绝不写回系统前缀）。
+// 包含：当前日期、运行模式、本次运行 token 用量、模式提示词、额外的 RAG/记忆上下文。
+func (a *Agent) envContext() string {
+	var b strings.Builder
+	b.WriteString("Today's date: " + time.Now().Format("2006-01-02"))
+	mode := a.Mode
+	if mode == "" {
+		mode = ModeBuild
+	}
+	b.WriteString("\nMode: " + mode)
+	if a.Usage.InputTokens+a.Usage.OutputTokens > 0 {
+		b.WriteString(fmt.Sprintf("\nTokens so far: input=%d output=%d cached=%d",
+			a.Usage.InputTokens, a.Usage.OutputTokens, a.Usage.CachedTokens))
+	}
+	if a.MaxIterations > 0 {
+		b.WriteString(fmt.Sprintf("\nMax tool iterations per turn: %d", a.MaxIterations))
+	}
+	if mp := modePrompt(a.Mode, a.PromptDir); mp != "" {
+		b.WriteString("\n\n" + mp)
+	}
+	if ex := strings.TrimSpace(a.ContextExtra); ex != "" {
+		b.WriteString("\n\n" + ex)
+	}
+	return b.String()
+}
+
+// snapshotPtr 返回 TokenStats 的指针（Event.Stats 用指针以便 omitempty）。
+func snapshotPtr(s TokenStats) *TokenStats { return &s }
 
 // permissionMode 返回工具的执行模式：allow / ask / deny。
 func (a *Agent) permissionMode(tool string) string {

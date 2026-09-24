@@ -56,7 +56,7 @@ type anthropicMsg struct {
 
 type anthropicReq struct {
 	Model       string          `json:"model"`
-	System      string          `json:"system,omitempty"`
+	System      any             `json:"system,omitempty"` // string，或启用缓存时的 []systemBlock
 	Messages    []anthropicMsg  `json:"messages"`
 	Tools       []anthropicTool `json:"tools,omitempty"`
 	MaxTokens   int             `json:"max_tokens"`
@@ -65,9 +65,25 @@ type anthropicReq struct {
 }
 
 type anthropicTool struct {
-	Name        string          `json:"name"`
-	Description string          `json:"description"`
-	InputSchema json.RawMessage `json:"input_schema"`
+	Name         string          `json:"name"`
+	Description  string          `json:"description"`
+	InputSchema  json.RawMessage `json:"input_schema"`
+	CacheControl *cacheControl   `json:"cache_control,omitempty"`
+}
+
+// cacheControl 是 Anthropic 显式提示词缓存断点。type 目前只有 "ephemeral"。
+// 断点会缓存“从请求起点到该元素”的整段前缀（顺序：tools → system → messages）。
+type cacheControl struct {
+	Type string `json:"type"`
+}
+
+var ephemeralCache = &cacheControl{Type: "ephemeral"}
+
+// systemBlock 是带可选缓存断点的 system 文本块（System 以数组形式发送时使用）。
+type systemBlock struct {
+	Type         string        `json:"type"`
+	Text         string        `json:"text"`
+	CacheControl *cacheControl `json:"cache_control,omitempty"`
 }
 
 func toAnthropicMsg(m Message) anthropicMsg {
@@ -144,9 +160,23 @@ func (p *ClaudeProvider) buildBody(req ChatRequest) ([]byte, error) {
 			InputSchema: t.Function.Parameters,
 		})
 	}
+	// 显式缓存：把“system + tools”这段稳定前缀用 cache_control 标为可缓存。
+	// Anthropic 前缀顺序为 tools → system → messages，因此只需在 system 块打一个断点，
+	// 即可把 tools+system 整体纳入同一个缓存块（本项目已保证这段字节稳定，见 PromptAnchor）；
+	// 变化的 messages 在断点之后，不进缓存。system 为空时退而在最后一个 tool 上打断点。
+	// 关闭缓存且 system 为空时保持 nil（omitempty 省略，行为与改动前逐字节一致）。
+	var system any
+	if req.PromptCache && strings.TrimSpace(req.System) != "" {
+		system = []systemBlock{{Type: "text", Text: req.System, CacheControl: ephemeralCache}}
+	} else if req.System != "" {
+		system = req.System
+	}
+	if req.PromptCache && strings.TrimSpace(req.System) == "" && len(tools) > 0 {
+		tools[len(tools)-1].CacheControl = ephemeralCache
+	}
 	body := anthropicReq{
 		Model:     req.Model,
-		System:    req.System,
+		System:    system,
 		Messages:  msgs,
 		Tools:     tools,
 		MaxTokens: req.MaxTokens,

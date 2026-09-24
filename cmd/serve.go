@@ -139,6 +139,16 @@ type serverState struct {
 	client       ai.LLMClient
 	shuttingDown bool       // 收到关停信号后置位，拒绝新连接
 	rag          *rag.Index // 特性5：项目源码轻量 RAG 索引（懒构建）
+
+	// 显式提示词缓存 keepalive：缓存最近一次真实请求的“稳定前缀”（system+tools+model），
+	// 空闲期用它发极小的预热请求刷新 Claude 缓存 TTL。lastRealRun 记录上次真实请求时间，
+	// 有真实流量时不重复预热（真实请求本身就会刷新缓存）。
+	warmMu      sync.Mutex
+	warmModel   string
+	warmSystem  string
+	warmTools   []ai.Tool
+	warmOK      bool
+	lastRealRun atomic.Int64 // unix nanos
 }
 
 // connState 保存每个连接独立的会话（多对话）与待确认的工具调用。
@@ -300,6 +310,22 @@ func runServe(opts *ServeOptions) error {
 				sessID := cs.sessions.CurrentID()
 				if msg.Content == "/clear" {
 					cs.sessions.Current().Clear()
+					c.SendEvent(websocket.ServerEvent{Type: websocket.EvtDone, SessionID: sessID})
+					return
+				}
+				// 运行模式切换（纯后端、无需前端改动）：/plan 只读规划，/build 恢复全工具。
+				if cmd := strings.TrimSpace(msg.Content); cmd == "/plan" || cmd == "/build" {
+					mode := "build"
+					if cmd == "/plan" {
+						mode = "plan"
+					}
+					cs.sessions.Current().SetMode(mode)
+					_ = cs.sessions.SaveAll()
+					note := "已切换到 build 模式（可修改工作区）"
+					if mode == "plan" {
+						note = "已切换到 plan 模式（只读：仅可读取/搜索，不能修改文件）"
+					}
+					c.SendEvent(websocket.ServerEvent{Type: websocket.EvtDelta, Content: note, SessionID: sessID})
 					c.SendEvent(websocket.ServerEvent{Type: websocket.EvtDone, SessionID: sessID})
 					return
 				}
@@ -662,6 +688,13 @@ func runServe(opts *ServeOptions) error {
 
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
+
+	// 空闲期提示词缓存保活（仅 Claude + 显式开启时真正发请求）：绑定根 ctx，
+	// runServe 返回即取消，goroutine 不游离。
+	kaCtx, kaCancel := context.WithCancel(context.Background())
+	defer kaCancel()
+	startKeepalive(kaCtx, st)
+
 	// SIGHUP：热重载配置（重读 ~/.licode/config.json 并重建客户端），不中断服务。
 	hup := make(chan os.Signal, 1)
 	signal.Notify(hup, syscall.SIGHUP)
@@ -791,6 +824,14 @@ func runServerAgentWithAttachments(ctx context.Context, st *serverState, cs *con
 		ag.System = roleSystem + "\n" + ag.System
 	}
 	ag.Session = sess
+	// 运行模式来自会话（/plan 只读、/build 全工具），默认 build。
+	ag.Mode = sess.Mode()
+	// 记录“真实请求”时刻并缓存稳定前缀：空闲期 keepalive 用它刷新 Claude 缓存 TTL；
+	// 有真实流量时（lastRealRun 很新）keepalive 自动跳过，避免重复预热浪费 token。
+	st.lastRealRun.Store(time.Now().UnixNano())
+	if s.PromptCacheActive() && s.KeepaliveSec > 0 {
+		st.setWarmPrefix(ag.Model, ag.System, ag.VisibleTools())
+	}
 	// MaxCtxTokens 必须落在真实会话上（BuildAgent 里的临时会话已被上面的
 	// 赋值覆盖，若不重设则上下文窗口保护会静默失效）。
 	if s.MaxCtxTokens > 0 {
@@ -832,7 +873,9 @@ func runServerAgentWithAttachments(ctx context.Context, st *serverState, cs *con
 	}
 	if s.RAGEnabled {
 		if snippets := st.ragLookup(content, s.RAGSource, s.RAGTopFiles); snippets != "" {
-			ag.System += "\n\n以下是用户当前项目中的相关源码片段（来自 RAG 检索），" +
+			// RAG 片段属易变上下文，注入 C 区尾部（并入最后一条 user 消息），
+			// 不追加到 ag.System，以免破坏冻结前缀、抬高前缀缓存失效成本。
+			ag.ContextExtra = "以下是用户当前项目中的相关源码片段（来自 RAG 检索），" +
 				"请优先据此准确回答，不要编造不存在的内容：\n" + snippets
 		}
 	}
@@ -861,9 +904,14 @@ func runServerAgentWithAttachments(ctx context.Context, st *serverState, cs *con
 			c.SendEvent(websocket.ServerEvent{Type: websocket.EvtReasoning, Content: e.Content, SessionID: sessID})
 		} else if e.Type == agent.EventStatus {
 			c.SendEvent(websocket.ServerEvent{Type: websocket.EvtStatus, Content: e.Content, SessionID: sessID})
+		} else if e.Type == agent.EventStats {
+			c.SendEvent(websocket.ServerEvent{Type: websocket.EvtStats, Stats: e.Stats, SessionID: sessID})
 		}
 		return nil
 	})
+	// 把本次运行的 token 用量（含缓存命中）累计到会话并落盘，
+	// 之前 ag.Usage 只在内存里累加、从不回写，导致会话/前端看不到用量。
+	sess.AddUsage(ag.Usage)
 }
 
 // autoTitle 从第一条用户消息生成对话标题。

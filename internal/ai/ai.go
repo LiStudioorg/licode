@@ -70,6 +70,11 @@ type ChatRequest struct {
 	Tools       []Tool
 	MaxTokens   int
 	Temperature float64
+	// PromptCache 请求 Provider 显式缓存“系统提示词 + 工具目录”这段稳定前缀。
+	// 目前仅 Claude 支持（cache_control: ephemeral）；开启后命中缓存的输入 token 按
+	// 约 0.1× 计费。前缀必须是字节稳定的（本项目已用 PromptAnchor 保证），否则不命中。
+	// 其它 Provider 忽略该字段（OpenAI 前缀缓存是自动的，无需显式断点）。
+	PromptCache bool
 }
 
 // Usage reports per-call token consumption. CachedTokens counts prompt tokens
