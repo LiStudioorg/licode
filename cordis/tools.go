@@ -109,7 +109,7 @@ func (tr *ToolRegistry) Execute(ctx context.Context, name string, args map[strin
 // ExecuteResult 执行工具并返回结构化结果。
 func (tr *ToolRegistry) ExecuteResult(ctx context.Context, name string, args map[string]any) (ToolResult, error) {
 	r := tr.r
-	call := ToolCall{Name: name, Args: args}
+	call := ToolCall{Name: name, Args: args, Ctx: ctx}
 
 	out, err := r.bus.Waterfall(r.detached, EventToolPreExecute, call, func(in any) (any, error) {
 		tc, ok := in.(ToolCall)

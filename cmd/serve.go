@@ -23,6 +23,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"licode/cordis"
 	"licode/internal/agent"
 	"licode/internal/ai"
 	"licode/internal/rag"
@@ -31,6 +32,7 @@ import (
 	"licode/internal/version"
 	"licode/internal/web"
 	"licode/internal/websocket"
+	"licode/plugins"
 )
 
 // ServeOptions holds resolved configuration for the serve command.
@@ -137,8 +139,10 @@ type serverState struct {
 	mu           sync.RWMutex
 	settings     settings.Settings
 	client       ai.LLMClient
-	shuttingDown bool       // 收到关停信号后置位，拒绝新连接
-	rag          *rag.Index // 特性5：项目源码轻量 RAG 索引（懒构建）
+	shuttingDown bool              // 收到关停信号后置位，拒绝新连接
+	rag          *rag.Index        // 特性5：项目源码轻量 RAG 索引（懒构建）
+	cordis       *cordis.Runtime   // 插件微内核（工具树/权限管道）
+	toolReg      *cordis.ToolRegistry // cordis 工具执行入口（Agent.Pipeline）
 }
 
 // connState 保存每个连接独立的会话（多对话）与待确认的工具调用。
@@ -187,6 +191,20 @@ func runServe(opts *ServeOptions) error {
 	st := &serverState{}
 	st.settings = settings.Defaults()
 	st.settings.ApplyFlags(opts.NoSubAgents)
+
+	// Cordis 插件微内核：内置工具与权限管道都注册进插件树，
+	// 工具执行统一走 tools/pre-execute → execute → post-execute。
+	rt := cordis.NewRuntime(cordis.WithOutput(os.Stderr))
+	st.cordis = rt
+	if v, ok := rt.Get(cordis.ServiceTools); ok {
+		st.toolReg = v.(*cordis.ToolRegistry)
+	}
+	if err := plugins.RegisterAll(rt, agent.ShellConfig{Path: st.settings.Snapshot().ShellPath}); err != nil {
+		log.Printf("内置插件加载失败（工具回退为旧内联路径）: %v", err)
+		st.cordis, st.toolReg = nil, nil
+	} else {
+		defer rt.Shutdown()
+	}
 
 	client, err := st.settings.NewClient()
 	if err != nil {
@@ -803,6 +821,10 @@ func runServerAgentWithAttachments(ctx context.Context, st *serverState, cs *con
 	}
 
 	ag := s.BuildAgent(client)
+	if st.toolReg != nil {
+		// 工具执行走 cordis 管道（权限/审计由插件监听器处理）。
+		ag.Pipeline = st.toolReg
+	}
 	if roleSystem != "" {
 		ag.System = roleSystem + "\n" + ag.System
 	}
