@@ -7,6 +7,7 @@ import (
 	"io"
 	"io/fs"
 	"log"
+	"math"
 	"net"
 	"net/http"
 	"net/url"
@@ -300,6 +301,22 @@ func runServe(opts *ServeOptions) error {
 				sessID := cs.sessions.CurrentID()
 				if msg.Content == "/clear" {
 					cs.sessions.Current().Clear()
+					c.SendEvent(websocket.ServerEvent{Type: websocket.EvtDone, SessionID: sessID})
+					return
+				}
+				// 运行模式切换（纯后端、无需前端改动）：/plan 只读规划，/build 恢复全工具。
+				if cmd := strings.TrimSpace(msg.Content); cmd == "/plan" || cmd == "/build" {
+					mode := "build"
+					if cmd == "/plan" {
+						mode = "plan"
+					}
+					cs.sessions.Current().SetMode(mode)
+					_ = cs.sessions.SaveAll()
+					note := "已切换到 build 模式（可修改工作区）"
+					if mode == "plan" {
+						note = "已切换到 plan 模式（只读：仅可读取/搜索，不能修改文件）"
+					}
+					c.SendEvent(websocket.ServerEvent{Type: websocket.EvtDelta, Content: note, SessionID: sessID})
 					c.SendEvent(websocket.ServerEvent{Type: websocket.EvtDone, SessionID: sessID})
 					return
 				}
@@ -783,7 +800,9 @@ func runServerAgentWithAttachments(ctx context.Context, st *serverState, cs *con
 		return
 	}
 	if s.TitleGen && sess.Title() == "新对话" {
+		// 先用截断标题即时占位（UI 立刻可见），再异步用 LLM 生成更好的标题覆盖。
 		sess.SetTitle(autoTitle(content))
+		go generateTitleAsync(cs, client, sess, filepath.Join(settings.BaseDir(), "prompts"), content)
 	}
 
 	ag := s.BuildAgent(client)
@@ -791,40 +810,42 @@ func runServerAgentWithAttachments(ctx context.Context, st *serverState, cs *con
 		ag.System = roleSystem + "\n" + ag.System
 	}
 	ag.Session = sess
+	// 运行模式来自会话（/plan 只读、/build 全工具），默认 build。
+	ag.Mode = sess.Mode()
 	// MaxCtxTokens 必须落在真实会话上（BuildAgent 里的临时会话已被上面的
 	// 赋值覆盖，若不重设则上下文窗口保护会静默失效）。
 	if s.MaxCtxTokens > 0 {
 		sess.SetMaxTokens(s.MaxCtxTokens)
 	}
-		defer ag.Close()
-		ag.Ask = func(ctx context.Context, toolName, args string) (bool, error) {
-			if s.AutoAllow || sess.AlwaysAllowed(toolName) {
-				return true, nil
-			}
-			askID := fmt.Sprintf("ask-%d", cs.askSeq.Add(1))
-			ch := make(chan bool, 1)
-			cs.mu.Lock()
-			cs.pending[askID] = ch
-			cs.askTool[askID] = toolName
-			cs.mu.Unlock()
-			// 无论因何退出（收到回复/上下文取消/Agent 异常结束），都清理映射，
-			// 避免前端不回复时 pending/askTool 条目永久驻留泄漏。
-			defer func() {
-				cs.mu.Lock()
-				delete(cs.pending, askID)
-				delete(cs.askTool, askID)
-				cs.mu.Unlock()
-			}()
-			c.SendEvent(websocket.ServerEvent{
-				Type: websocket.EvtAsk, ToolName: toolName, ToolArgs: args, AskID: askID, SessionID: sessID,
-			})
-			select {
-			case ok := <-ch:
-				return ok, nil
-			case <-ctx.Done():
-				return false, ctx.Err()
-			}
+	defer ag.Close()
+	ag.Ask = func(ctx context.Context, toolName, args string) (bool, error) {
+		if s.AutoAllow || sess.AlwaysAllowed(toolName) {
+			return true, nil
 		}
+		askID := fmt.Sprintf("ask-%d", cs.askSeq.Add(1))
+		ch := make(chan bool, 1)
+		cs.mu.Lock()
+		cs.pending[askID] = ch
+		cs.askTool[askID] = toolName
+		cs.mu.Unlock()
+		// 无论因何退出（收到回复/上下文取消/Agent 异常结束），都清理映射，
+		// 避免前端不回复时 pending/askTool 条目永久驻留泄漏。
+		defer func() {
+			cs.mu.Lock()
+			delete(cs.pending, askID)
+			delete(cs.askTool, askID)
+			cs.mu.Unlock()
+		}()
+		c.SendEvent(websocket.ServerEvent{
+			Type: websocket.EvtAsk, ToolName: toolName, ToolArgs: args, AskID: askID, SessionID: sessID,
+		})
+		select {
+		case ok := <-ch:
+			return ok, nil
+		case <-ctx.Done():
+			return false, ctx.Err()
+		}
+	}
 
 	stream := true
 	if s.Streaming != nil {
@@ -832,7 +853,9 @@ func runServerAgentWithAttachments(ctx context.Context, st *serverState, cs *con
 	}
 	if s.RAGEnabled {
 		if snippets := st.ragLookup(content, s.RAGSource, s.RAGTopFiles); snippets != "" {
-			ag.System += "\n\n以下是用户当前项目中的相关源码片段（来自 RAG 检索），" +
+			// RAG 片段属易变上下文，注入 C 区尾部（并入最后一条 user 消息），
+			// 不追加到 ag.System，以免破坏冻结前缀、抬高前缀缓存失效成本。
+			ag.ContextExtra = "以下是用户当前项目中的相关源码片段（来自 RAG 检索），" +
 				"请优先据此准确回答，不要编造不存在的内容：\n" + snippets
 		}
 	}
@@ -861,9 +884,118 @@ func runServerAgentWithAttachments(ctx context.Context, st *serverState, cs *con
 			c.SendEvent(websocket.ServerEvent{Type: websocket.EvtReasoning, Content: e.Content, SessionID: sessID})
 		} else if e.Type == agent.EventStatus {
 			c.SendEvent(websocket.ServerEvent{Type: websocket.EvtStatus, Content: e.Content, SessionID: sessID})
+		} else if e.Type == agent.EventStats {
+			c.SendEvent(websocket.ServerEvent{Type: websocket.EvtStats, Stats: e.Stats, SessionID: sessID})
 		}
 		return nil
 	})
+	// 把本次运行的 token 用量（含缓存命中）累计到会话并落盘，
+	// 之前 ag.Usage 只在内存里累加、从不回写，导致会话/前端看不到用量。
+	sess.AddUsage(ag.Usage)
+	// 推送与前端 StatsInfo 对齐的信息面板快照（用量已含本次运行；context 用冻结 System 估算）。
+	c.SendEvent(websocket.ServerEvent{Type: websocket.EvtStats, Stats: buildSessionStats(client, sess, ag.System), SessionID: sessID})
+}
+
+// buildSessionStats 组装与前端 StatsInfo 对齐的信息面板快照（11 个字段）。
+// context 估算：系统提示词 + 即将送入 LLM 的消息（EstimateTokens 近似）；
+// cache_hit_rate = 缓存命中输入 token / 总输入 token * 100。
+func buildSessionStats(client ai.LLMClient, sess *session.Session, system string) map[string]any {
+	ctxTokens := session.EstimateTokens(system)
+	for _, m := range sess.MessagesForLLM(system) {
+		ctxTokens += session.EstimateTokens(m.Content)
+		for _, tc := range m.ToolCalls {
+			ctxTokens += session.EstimateTokens(tc.Function.Arguments)
+		}
+	}
+	ctxMax := sess.MaxTokens()
+	pct := 0
+	if ctxMax > 0 {
+		pct = ctxTokens * 100 / ctxMax
+	}
+	u := sess.Usage()
+	var cacheRate float64
+	if u.InputTokens > 0 {
+		cacheRate = float64(u.CachedTokens) * 100 / float64(u.InputTokens)
+	}
+	provider, model := "", ""
+	if client != nil {
+		provider, model = client.Provider(), client.Model()
+	}
+	return map[string]any{
+		"messages":         sess.Len(),
+		"context_tokens":   ctxTokens,
+		"context_max":      ctxMax,
+		"context_pct":      pct,
+		"provider":         provider,
+		"model":            model,
+		"conversation_in":  u.InputTokens,
+		"conversation_out": u.OutputTokens,
+		"usage_cached":     u.CachedTokens,
+		"cache_hit_rate":   math.Round(cacheRate*10) / 10,
+		"always_allow":     sess.AlwaysAllowedList(),
+	}
+}
+
+// defaultTitlePrompt 是标题生成的内置提示词；~/.licode/prompts/title.md 若存在则覆盖它。
+const defaultTitlePrompt = `You are a title generator. You output ONLY a thread title. Nothing else.
+- A single line, <=50 characters, no explanations.
+- MUST use the same language as the user message you are summarizing.
+- Focus on the main topic or question; keep exact technical terms, numbers, filenames.
+- Never include tool names; never assume tech stack; never answer the question.
+- Always output something meaningful even if the input is minimal.`
+
+// generateTitleAsync 为对话生成短标题：优先用 promptDir/title.md 作为 System（缺省用内置提示词），
+// temperature 0.5；成功则覆盖占位标题并落盘，失败/为空则保留 autoTitle 截断标题。
+func generateTitleAsync(cs *connState, client ai.LLMClient, sess *session.Session, promptDir, content string) {
+	if client == nil {
+		return
+	}
+	defer func() { _ = recover() }()
+	sys := defaultTitlePrompt
+	if promptDir != "" {
+		if data, err := os.ReadFile(filepath.Join(promptDir, "title.md")); err == nil {
+			if s := strings.TrimSpace(string(data)); s != "" {
+				sys = s
+			}
+		}
+	}
+	trimmed := strings.TrimSpace(content)
+	if utf8.RuneCountInString(trimmed) > 2000 {
+		trimmed = string([]rune(trimmed)[:2000])
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	out, err := client.Chat(ctx, ai.ChatRequest{
+		Model:       client.Model(),
+		System:      sys,
+		Messages:    []ai.Message{{Role: ai.RoleUser, Content: trimmed}},
+		MaxTokens:   64,
+		Temperature: 0.5,
+	})
+	if err != nil {
+		return
+	}
+	title := firstLine(strings.TrimSpace(out))
+	if utf8.RuneCountInString(title) > 50 {
+		title = string([]rune(title)[:50])
+	}
+	if title == "" {
+		return
+	}
+	// 仅当标题仍是本次的占位标题时才覆盖，避免盖掉用户手动改名。
+	if sess.Title() == autoTitle(content) {
+		sess.SetTitle(title)
+		_ = cs.sessions.SaveAll()
+	}
+}
+
+// firstLine 取首行（去掉模型可能附带的解释行）。
+func firstLine(s string) string {
+	s = strings.TrimSpace(s)
+	if i := strings.IndexAny(s, "\r\n"); i >= 0 {
+		return strings.TrimSpace(s[:i])
+	}
+	return s
 }
 
 // autoTitle 从第一条用户消息生成对话标题。
@@ -886,7 +1018,7 @@ func serveNuxtFile(w http.ResponseWriter, r *http.Request, nuxt fs.FS, name stri
 		http.NotFound(w, r)
 		return
 	}
-	
+
 	info, err := fs.Stat(nuxt, cleanName)
 	if err != nil {
 		http.NotFound(w, r)

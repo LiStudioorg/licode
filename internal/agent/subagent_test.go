@@ -79,7 +79,7 @@ func TestSchedulerDAGOrdering(t *testing.T) {
 		if res.Error != "" {
 			t.Fatalf("task %s error: %s", name, res.Error)
 		}
-		if !strings.Contains(res.Output, "output("+promptByTask[name]+")") {
+		if !strings.HasPrefix(res.Output, "output("+promptByTask[name]) {
 			t.Fatalf("task %s output=%q", name, res.Output)
 		}
 	}
