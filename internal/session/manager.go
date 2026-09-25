@@ -226,15 +226,17 @@ func (m *Manager) Branch(parentID string, fromIndex int) (*Session, bool) {
 		return nil, false
 	}
 	parent.mu.Lock()
-	msgs := parent.messages
+	// 在锁内完成取值与拷贝：maxTok/title/messages 都必须在持有 parent.mu 时读，
+	// 否则与 Agent 并发 Add / SetMaxTokens 构成数据竞争（-race 可检出）。
+	if fromIndex < 0 || fromIndex > len(parent.messages) {
+		fromIndex = len(parent.messages)
+	}
+	maxTok := parent.maxTok
+	copied := make([]ai.Message, fromIndex)
+	copy(copied, parent.messages[:fromIndex])
 	title := parent.title
 	parent.mu.Unlock()
-	if fromIndex < 0 || fromIndex > len(msgs) {
-		fromIndex = len(msgs)
-	}
-	b := NewSession(parent.maxTok)
-	copied := make([]ai.Message, fromIndex)
-	copy(copied, msgs[:fromIndex])
+	b := NewSession(maxTok)
 	b.title = "分支·" + title
 	b.SetOnChange(func() { m.SaveSession(b.ID()) })
 	b.messages = copied

@@ -88,13 +88,6 @@ func (inj *Injector) get(name string) (any, bool) {
 }
 
 // has 判断服务是否就绪。
-func (inj *Injector) has(name string) bool {
-	inj.inj.RLock()
-	defer inj.inj.RUnlock()
-	_, ok := inj.providers[name]
-	return ok
-}
-
 // waitFor 检查 deps 是否全部就绪；未就绪则把 fiber 挂到缺失服务的等待队列。
 func (inj *Injector) waitFor(deps []string, fiber *Fiber) bool {
 	inj.inj.Lock()

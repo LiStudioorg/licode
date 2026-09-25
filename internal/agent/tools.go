@@ -16,10 +16,7 @@ import (
 	"licode/internal/procutil"
 )
 
-var (
-	allowedCommandPattern = regexp.MustCompile(`^[a-zA-Z0-9_./-]+$`)
-	workspaceRoot         atomic.Value // string：AI 工具的工作目录
-)
+var workspaceRoot atomic.Value // string：AI 工具的工作目录
 
 func init() {
 	if wd, err := os.Getwd(); err == nil {
@@ -73,7 +70,7 @@ func ensurePathAllowed(ctx context.Context, path, tool string) (string, error) {
 		return "", fmt.Errorf("path required")
 	}
 	if strings.Contains(path, "..") {
-		return "", fmt.Errorf("path contains ..")
+		return "", fmt.Errorf("path contains .. traversal")
 	}
 	root := WorkspaceRoot()
 	if root == "" {
@@ -396,7 +393,9 @@ func RegisterDefaultTools(r *Registry, sh ShellConfig) {
 				cmd.Args = append(cmd.Args, "-g", include)
 			}
 			cmd.Args = append(cmd.Args, "-g", "!.git", "-g", "!node_modules", "-g", "!vendor")
-			cmd.Args = append(cmd.Args, pattern, root)
+			// "--" 终止选项解析：pattern/root 以 "-" 开头（如 "-e"、"--version"）时
+			// 否则会被 rg 当作参数解析（参数注入：可悄悄改写搜索行为）。
+			cmd.Args = append(cmd.Args, "--", pattern, root)
 			out, err := cmd.CombinedOutput()
 			if err != nil {
 				if len(out) == 0 {
@@ -499,6 +498,17 @@ func RegisterDefaultTools(r *Registry, sh ShellConfig) {
 			if cwd != "" {
 				cmd.Dir = cwd
 			}
+			// 独立进程组 + 取消时杀整组：只杀 shell 会把孙进程（npm/构建守护等）
+			// 留成孤儿继续吃资源。
+			killGroup := procutil.SetupProcessGroup(cmd)
+			defer killGroup()
+			// exec.CommandContext 默认只杀 shell 自身；这里补杀整个进程组。
+			go func() {
+				<-cmdCtx.Done()
+				if cmd.Process != nil {
+					killGroup()
+				}
+			}()
 			out, err := cmd.CombinedOutput()
 			s := string(out)
 			if len(s) > 30000 {

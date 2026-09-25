@@ -54,32 +54,46 @@ func startKeepalive(ctx context.Context, st *serverState) {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				st.mu.RLock()
-				s := st.settings.Snapshot()
-				client := st.client
-				st.mu.RUnlock()
-				if !s.PromptCacheActive() || s.KeepaliveSec <= 0 {
-					continue
-				}
-				interval := time.Duration(s.KeepaliveSec) * time.Second
-				if last := time.Unix(0, st.lastRealRun.Load()); !last.IsZero() && time.Since(last) < interval {
-					continue // 有真实流量，缓存已被真实请求刷新
-				}
-				if !lastWarm.IsZero() && time.Since(lastWarm) < interval {
-					continue
-				}
-				req, ok := st.warmPrefix()
-				if !ok {
-					continue
-				}
-				lastWarm = time.Now()
-				wctx, cancel := context.WithTimeout(ctx, 30*time.Second)
-				_, err := client.Chat(wctx, req)
-				cancel()
-				if err != nil {
-					log.Printf("提示词缓存预热失败(忽略): %v", err)
-				}
+				// 预热 panic 不能带崩整个进程（客户端/插件实现不受本循环控制）。
+				func() {
+					defer func() {
+						if r := recover(); r != nil {
+							log.Printf("keepalive panic 已捕获: %v", r)
+						}
+					}()
+					lastWarm = keepaliveTick(ctx, st, lastWarm)
+				}()
 			}
 		}
 	}()
+}
+
+// keepaliveTick 执行一次预热检查；返回（可能更新的）lastWarm。
+func keepaliveTick(ctx context.Context, st *serverState, lastWarm time.Time) time.Time {
+	st.mu.RLock()
+	s := st.settings.Snapshot()
+	client := st.client
+	st.mu.RUnlock()
+	if !s.PromptCacheActive() || s.KeepaliveSec <= 0 {
+		return lastWarm
+	}
+	interval := time.Duration(s.KeepaliveSec) * time.Second
+	if last := time.Unix(0, st.lastRealRun.Load()); !last.IsZero() && time.Since(last) < interval {
+		return lastWarm // 有真实流量，缓存已被真实请求刷新
+	}
+	if !lastWarm.IsZero() && time.Since(lastWarm) < interval {
+		return lastWarm
+	}
+	req, ok := st.warmPrefix()
+	if !ok {
+		return lastWarm
+	}
+	lastWarm = time.Now()
+	wctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	_, err := client.Chat(wctx, req)
+	cancel()
+	if err != nil {
+		log.Printf("提示词缓存预热失败(忽略): %v", err)
+	}
+	return lastWarm
 }

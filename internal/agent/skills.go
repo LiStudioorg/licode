@@ -86,11 +86,39 @@ func ParseSkill(data []byte) (Skill, bool) {
 	return s, false
 }
 
+// sanitizeSkillName 清洗技能名：frontmatter 是外部输入，含空格/中文/标点等
+// 非法字符的工具名会被 OpenAI/Claude 的服务端 schema 校验整体拒绝，
+// 一个坏技能文件即可让后续所有请求 400。仅保留 [A-Za-z0-9_-]，其余替换为下划线。
+func sanitizeSkillName(name string) string {
+	var b strings.Builder
+	prevUnderscore := false
+	for _, r := range name {
+		ok := (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9')
+		if ok {
+			b.WriteRune(r)
+			prevUnderscore = false
+			continue
+		}
+		if !prevUnderscore && b.Len() > 0 {
+			b.WriteByte('_')
+			prevUnderscore = true
+		}
+	}
+	out := strings.Trim(b.String(), "_")
+	if out == "" {
+		return "skill"
+	}
+	if len(out) > 48 {
+		out = out[:48]
+	}
+	return out
+}
+
 // RegisterSkills 把技能注册为工具：调用时把技能指令返回给模型遵循。
 func RegisterSkills(r *Registry, skills []Skill) {
 	for _, sk := range skills {
 		body := sk.Body
-		name := sk.Name
+		name := sanitizeSkillName(sk.Name)
 		desc := sk.Description
 		if desc == "" {
 			desc = "技能 " + name

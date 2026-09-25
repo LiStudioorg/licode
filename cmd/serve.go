@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -15,6 +16,7 @@ import (
 	"os/signal"
 	"path"
 	"path/filepath"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -344,6 +346,9 @@ func runServe(opts *ServeOptions) error {
 				sessID := cs.sessions.CurrentID()
 				if msg.Content == "/clear" {
 					cs.sessions.Current().Clear()
+					// 立即落盘：否则内存里清空了、磁盘存档还留着全部旧消息，
+					// 重启后“已清空”的会话原样复活。
+					_ = cs.sessions.SaveAll()
 					c.SendEvent(websocket.ServerEvent{Type: websocket.EvtDone, SessionID: sessID})
 					return
 				}
@@ -383,6 +388,12 @@ func runServe(opts *ServeOptions) error {
 				// sessID 在入队时固定，运行中切换 Current 不影响本次归属的会话。
 				go func() {
 					defer func() {
+						// Agent 内部任何 panic 就地捕获：否则单点崩溃会带掉整个服务进程。
+						if r := recover(); r != nil {
+							log.Printf("agent panic 已捕获 (session %s): %v\n%s", sessID, r, debug.Stack())
+							c.SendEvent(websocket.ServerEvent{Type: websocket.EvtError, Error: fmt.Sprintf("内部错误: %v", r), SessionID: sessID})
+							c.SendEvent(websocket.ServerEvent{Type: websocket.EvtDone, SessionID: sessID})
+						}
 						cs.mu.Lock()
 						delete(cs.busy, sessID)
 						delete(cs.interruptCancel, sessID)
@@ -734,15 +745,23 @@ func runServe(opts *ServeOptions) error {
 	signal.Notify(hup, syscall.SIGHUP)
 	go func() {
 		for range hup {
-			if err := reloadServerSettings(st); err != nil {
-				log.Printf("SIGHUP 重载失败: %v", err)
-			} else {
-				log.Printf("SIGHUP 已重载配置")
-				// RAGSource 可能变化，重建索引
-				st.mu.Lock()
-				st.rag = nil
-				st.mu.Unlock()
-			}
+			// 重载走插件级联重建，任何 panic 都不能带崩服务。
+			func() {
+				defer func() {
+					if r := recover(); r != nil {
+						log.Printf("SIGHUP 重载 panic 已捕获: %v", r)
+					}
+				}()
+				if err := reloadServerSettings(st); err != nil {
+					log.Printf("SIGHUP 重载失败: %v", err)
+				} else {
+					log.Printf("SIGHUP 已重载配置")
+					// RAGSource 可能变化，重建索引
+					st.mu.Lock()
+					st.rag = nil
+					st.mu.Unlock()
+				}
+			}()
 		}
 	}()
 	go func() {
@@ -1090,9 +1109,11 @@ func autoTitle(content string) string {
 // .html 不缓存（改版即时生效）；/_nuxt/ 资源名带内容哈希，可长缓存。
 // 目录路径（/settings、/tools）会解析到其 index.html，避免被当成文件服务而 301。
 func serveNuxtFile(w http.ResponseWriter, r *http.Request, nuxt fs.FS, name string) {
-	// 安全校验：防止路径遍历攻击
-	cleanName := filepath.Clean(name)
-	if strings.HasPrefix(cleanName, "..") || filepath.IsAbs(cleanName) {
+	// 安全校验：防止路径遍历攻击。
+	// 必须用 path 而非 filepath：fs.FS 的路径永远是以 / 分隔的 slash path，
+	// filepath.Clean 在 Windows 上会产出反斜杠路径导致内嵌 FS 查不到文件。
+	cleanName := path.Clean(name)
+	if strings.HasPrefix(cleanName, "..") || strings.HasPrefix(cleanName, "/") {
 		http.NotFound(w, r)
 		return
 	}
@@ -1118,7 +1139,24 @@ func serveNuxtFile(w http.ResponseWriter, r *http.Request, nuxt fs.FS, name stri
 	} else {
 		w.Header().Set("Cache-Control", "public, max-age=604800")
 	}
-	http.ServeFile(w, r, filepath.Join("nuxtweb", cleanName))
+	// 从 go:embed 内嵌 FS 提供内容：二进制发布后运行目录不存在 nuxtweb/，
+	// 旧实现 http.ServeFile 读磁盘导致前端整站 404。
+	f, err := nuxt.Open(cleanName)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	defer f.Close()
+	rs, ok := f.(io.ReadSeeker)
+	if !ok {
+		data, rerr := io.ReadAll(f)
+		if rerr != nil {
+			http.Error(w, "read embedded asset", http.StatusInternalServerError)
+			return
+		}
+		rs = bytes.NewReader(data)
+	}
+	http.ServeContent(w, r, cleanName, info.ModTime(), rs)
 }
 
 // isUnsafeMethod 判断是否为写请求方法（GET/HEAD/OPTIONS 之外）。
@@ -1135,7 +1173,7 @@ func isUnsafeMethod(m string) bool {
 func sameOriginGuard(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if (isUnsafeMethod(r.Method) && strings.HasPrefix(r.URL.Path, "/api/")) || r.URL.Path == "/ws" {
-			if o := r.Header.Get("Origin"); o != "" && !originMatchesHost(o, r.Host) {
+			if o := r.Header.Get("Origin"); o != "" && !originMatchesHost(o, r) {
 				w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 				w.WriteHeader(http.StatusForbidden)
 				_, _ = w.Write([]byte("403 跨站请求已被拒绝"))
@@ -1146,7 +1184,8 @@ func sameOriginGuard(next http.Handler) http.Handler {
 	})
 }
 
-func originMatchesHost(origin, host string) bool {
+func originMatchesHost(origin string, r *http.Request) bool {
+	host := r.Host
 	ou, err := url.Parse(origin)
 	if err != nil || ou.Host == "" {
 		return false
@@ -1154,12 +1193,27 @@ func originMatchesHost(origin, host string) bool {
 	if strings.EqualFold(ou.Host, host) {
 		return true
 	}
-	// 兼容 Host 带/不带默认端口的差异。
-	h := host
-	if hh, _, e := net.SplitHostPort(host); e == nil {
-		h = hh
+	// 端口敏感比较：旧实现只比主机名，同机跨端口的任意站点（如恶意页面恰好
+	// 跑在 127.0.0.1:9999）都能通过校验，把 licode 的会话 Cookie 当同源凭据打穿。
+	// 缺省端口按实际协议补全：直接 TLS 连接看 r.TLS，反代后面看 X-Forwarded-Proto。
+	tlsReq := r.TLS != nil || strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https")
+	defPort := "80"
+	if tlsReq {
+		defPort = "443"
 	}
-	return strings.EqualFold(ou.Hostname(), h)
+	op := ou.Port()
+	if op == "" {
+		if ou.Scheme == "https" {
+			op = "443"
+		} else {
+			op = "80"
+		}
+	}
+	h, hp, e := net.SplitHostPort(host)
+	if e != nil {
+		h, hp = host, defPort
+	}
+	return strings.EqualFold(ou.Hostname(), h) && op == hp
 }
 
 // securityHeaders 追加基础安全响应头。

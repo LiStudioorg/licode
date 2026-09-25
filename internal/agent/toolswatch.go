@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"licode/internal/procutil"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -210,6 +211,15 @@ func toolFromCommand(def *CommandToolDef) Tool {
 			cctx, cancel := context.WithTimeout(ctx, time.Duration(timeout)*time.Second)
 			defer cancel()
 			cmd := exec.CommandContext(cctx, "/bin/sh", "-c", def.Command)
+			// 独立进程组：超时/中断时连同孙进程一并杀掉，不留孤儿。
+			killGroup := procutil.SetupProcessGroup(cmd)
+			defer killGroup()
+			go func() {
+				<-cctx.Done()
+				if cmd.Process != nil {
+					killGroup()
+				}
+			}()
 			cmd.Env = append(os.Environ(), def.Env...)
 			if def.ArgsMode == "env" {
 				cmd.Env = append(cmd.Env, "TOOL_ARGS="+string(argsJSON))

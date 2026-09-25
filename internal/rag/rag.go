@@ -179,12 +179,29 @@ func header(file string) string {
 
 var tokenRe = regexp.MustCompile(`[A-Za-z_][A-Za-z0-9_]*`)
 
-// tokenize 提取文本中的标识符（单词/函数名），长度 >=3 且非纯数字。
+// cjkRe 匹配连续的 CJK（含假名/谚文）字符段。
+var cjkRe = regexp.MustCompile(`[\p{Han}\p{Hiragana}\p{Katakana}\p{Hangul}]+`)
+
+// tokenize 提取检索词：
+//   - 拉丁标识符（单词/函数名），长度 >=3 且非纯数字；
+//   - CJK 二元组（bigram）：中文没有空格分词，旧实现用纯 ASCII 正则，
+//     中文注释/中文提问完全不在索引里，RAG 对中文项目等于失效。
+//     bigram 是无词典方案里召回/开销平衡的常用选择（"用户登录" -> 用户/户登/登录）。
 func tokenize(s string) []string {
 	set := map[string]bool{}
 	for _, m := range tokenRe.FindAllString(s, -1) {
 		if len(m) >= 3 && !isNumeric(m) {
 			set[strings.ToLower(m)] = true
+		}
+	}
+	for _, seg := range cjkRe.FindAllString(s, -1) {
+		rs := []rune(seg)
+		if len(rs) == 1 {
+			set[string(rs)] = true
+			continue
+		}
+		for i := 0; i+1 < len(rs); i++ {
+			set[string(rs[i:i+2])] = true
 		}
 	}
 	out := make([]string, 0, len(set))

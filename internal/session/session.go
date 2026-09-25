@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sync"
 	"unicode/utf8"
 
@@ -207,7 +208,29 @@ func (s *Session) SaveToFile(path string) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, data, 0o600)
+	// 原子写：先写同目录临时文件再 rename。直接 WriteFile 在写入中途断电/崩溃
+	// 会留下截断的 JSON，下次启动该会话静默丢失。
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".tmp-*")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName) // rename 成功后为 no-op
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Chmod(tmpName, 0o600); err != nil {
+		return err
+	}
+	return os.Rename(tmpName, path)
 }
 
 // LoadSessionFile 从磁盘加载会话存档。
@@ -261,6 +284,17 @@ func (s *Session) Len() int {
 	return len(s.messages)
 }
 
+// LastRole 返回最后一条消息的角色（空会话返回 ""），
+// 供调用方判断会话是否以孤立的 user/tool 消息收尾。
+func (s *Session) LastRole() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.messages) == 0 {
+		return ""
+	}
+	return s.messages[len(s.messages)-1].Role
+}
+
 // MaxTokens 返回本会话的上下文预算。
 func (s *Session) MaxTokens() int {
 	s.mu.Lock()
@@ -300,7 +334,18 @@ func (s *Session) MessagesForLLM(system string) []ai.Message {
 	msgs := make([]ai.Message, len(s.messages))
 	copy(msgs, s.messages)
 	summary := s.summary
+	maxTok := s.maxTok
 	s.mu.Unlock()
+
+	// maxTok<=0 表示不裁剪（SetMaxTokens 文档承诺的语义）：
+	// 若不特判，预算比较 total+cost > 0 恒成立，会话会被裁到只剩 1 条消息。
+	if maxTok <= 0 {
+		out := msgs
+		if summary != "" {
+			out = append([]ai.Message{{Role: ai.RoleUser, Content: "【之前对话的压缩摘要】\n" + summary}}, msgs...)
+		}
+		return out
+	}
 
 	var budget int
 	if system != "" {
@@ -316,12 +361,12 @@ func (s *Session) MessagesForLLM(system string) []ai.Message {
 		for _, tc := range m.ToolCalls {
 			cost += EstimateTokens(tc.Function.Arguments)
 		}
-		if total+cost > s.maxTok && len(tail) > 0 {
+		if total+cost > maxTok && len(tail) > 0 {
 			break
 		}
 		tail = append(tail, m)
 		total += cost
-		if total >= s.maxTok {
+		if total >= maxTok {
 			break
 		}
 	}
@@ -329,10 +374,18 @@ func (s *Session) MessagesForLLM(system string) []ai.Message {
 	for i, j := 0, len(tail)-1; i < j; i, j = i+1, j-1 {
 		tail[i], tail[j] = tail[j], tail[i]
 	}
-	// 截断点若落在 assistant(tool_calls) 与 tool 结果之间，会留下"孤儿 tool
-	// 消息"，OpenAI 等协议会直接 400。丢弃开头失去父调用的 tool 结果。
-	for len(tail) > 0 && tail[0].Role == ai.RoleTool {
+	// 裁剪后开头必须是 user：
+	//   - 开头的 tool 消息失去了父 assistant(tool_calls)（OpenAI 直接 400）；
+	//   - 开头的 assistant 消息违反 Anthropic「首条必须为 user」的约束（同样 400）。
+	// 逐条丢弃开头非 user 消息即可同时满足（丢弃 assistant 后其 tool 结果也成
+	// 为开头 tool 消息，会被同一循环继续丢弃）。
+	for len(tail) > 0 && tail[0].Role != ai.RoleUser {
 		tail = tail[1:]
+	}
+	// 末尾不能是带 tool_calls 却没有结果的 assistant：若工具执行中断，
+	// 这样一条消息会让后续所有请求 400。开头已是 user，删除它不会再造孤儿。
+	for len(tail) > 0 && tail[len(tail)-1].Role == ai.RoleAssistant && len(tail[len(tail)-1].ToolCalls) > 0 {
+		tail = tail[:len(tail)-1]
 	}
 	if summary != "" {
 		head := make([]ai.Message, 0, len(tail)+1)
@@ -360,8 +413,12 @@ func (s *Session) Dropped(system string) int {
 	s.mu.Lock()
 	msgs := make([]ai.Message, len(s.messages))
 	copy(msgs, s.messages)
+	maxTok := s.maxTok
 	s.mu.Unlock()
 
+	if maxTok <= 0 {
+		return 0 // 不裁剪 => 永远不会触发压缩
+	}
 	total := 0
 	if system != "" {
 		total = EstimateTokens(system)
@@ -372,7 +429,7 @@ func (s *Session) Dropped(system string) int {
 		for _, tc := range m.ToolCalls {
 			cost += EstimateTokens(tc.Function.Arguments)
 		}
-		if total+cost > s.maxTok {
+		if total+cost > maxTok {
 			dropped += cost
 		} else {
 			total += cost

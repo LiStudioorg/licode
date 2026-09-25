@@ -145,11 +145,12 @@ func jsonrpcError(name, method string, msg jsonrpcMsg) error {
 // ---- stdio 连接 ----
 
 type stdioConn struct {
-	server  MCPServer
-	cmd     *exec.Cmd
-	mu      sync.Mutex
-	pending map[int]chan json.RawMessage
-	nextID  int
+	server    MCPServer
+	cmd       *exec.Cmd
+	killGroup func() // 杀整个进程组（见 procutil.SetupProcessGroup）
+	mu        sync.Mutex
+	pending   map[int]chan json.RawMessage
+	nextID    int
 	stdin     *bufio.Writer
 	stdout    *bufio.Reader
 	closeCh   chan struct{}
@@ -165,6 +166,9 @@ func newStdioConn(ctx context.Context, s MCPServer) (*stdioConn, error) {
 	if s.Cwd != "" {
 		cmd.Dir = s.Cwd
 	}
+	// 独立进程组：MCP server 常见 node/npx 包装进程，杀父留子会把真实的
+	// 服务进程留成孤儿；close 时对整组发信号。
+	killGroup := procutil.SetupProcessGroup(cmd)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return nil, fmt.Errorf("stdin pipe: %w", err)
@@ -177,12 +181,13 @@ func newStdioConn(ctx context.Context, s MCPServer) (*stdioConn, error) {
 		return nil, fmt.Errorf("启动失败: %w", err)
 	}
 	c := &stdioConn{
-		server:  s,
-		cmd:     cmd,
-		stdin:   bufio.NewWriter(stdin),
-		stdout:  bufio.NewReader(stdout),
-		pending: make(map[int]chan json.RawMessage),
-		closeCh: make(chan struct{}),
+		server:    s,
+		cmd:       cmd,
+		stdin:     bufio.NewWriter(stdin),
+		stdout:    bufio.NewReader(stdout),
+		pending:   make(map[int]chan json.RawMessage),
+		closeCh:   make(chan struct{}),
+		killGroup: killGroup,
 	}
 	go c.readLoop()
 	if err := c.init(ctx); err != nil {
@@ -310,7 +315,7 @@ func (c *stdioConn) call(ctx context.Context, method string, params any) (json.R
 		if err := json.Unmarshal(raw, &msg); err != nil {
 			return nil, err
 		}
-	if err := jsonrpcError(c.server.Name, method, msg); err != nil {
+		if err := jsonrpcError(c.server.Name, method, msg); err != nil {
 			return nil, err
 		}
 		return msg.Result, nil
@@ -319,6 +324,13 @@ func (c *stdioConn) call(ctx context.Context, method string, params any) (json.R
 		delete(c.pending, id)
 		c.mu.Unlock()
 		return nil, fmt.Errorf("mcp %s.%s 超时", c.server.Name, method)
+	case <-ctx.Done():
+		// 调用方（Agent 运行/用户中断）取消时必须立刻返回并摘掉 pending：
+		// 否则调用挂到 30s 超时，中断语义失效且条目泄漏。
+		c.mu.Lock()
+		delete(c.pending, id)
+		c.mu.Unlock()
+		return nil, fmt.Errorf("mcp %s.%s: %w", c.server.Name, method, ctx.Err())
 	case <-c.closeCh:
 		return nil, fmt.Errorf("mcp %s 已关闭", c.server.Name)
 	}
@@ -354,7 +366,12 @@ func (c *stdioConn) close() {
 	c.closeOnce.Do(func() {
 		close(c.closeCh)
 		if c.cmd != nil && c.cmd.Process != nil {
-			_ = c.cmd.Process.Kill()
+			// 杀整个进程组（含 node/npx 包装下的真实服务进程）
+			if c.killGroup != nil {
+				c.killGroup()
+			} else {
+				_ = c.cmd.Process.Kill()
+			}
 			_, _ = c.cmd.Process.Wait()
 		}
 	})

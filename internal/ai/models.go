@@ -66,31 +66,6 @@ func listOpenAIModels(ctx context.Context, cfg Config) ([]string, error) {
 	return names, nil
 }
 
-func listOllamaModels(ctx context.Context, cfg Config) ([]string, error) {
-	resp, err := httpGetJSON(ctx, strings.TrimRight(cfg.BaseURL, "/")+"/api/tags", "", cfg)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		b, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		return nil, fmt.Errorf("ollama %s: %s", resp.Status, strings.TrimSpace(string(b)))
-	}
-	var out struct {
-		Models []struct {
-			Name string `json:"name"`
-		} `json:"models"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		return nil, err
-	}
-	var names []string
-	for _, m := range out.Models {
-		names = append(names, m.Name)
-	}
-	return names, nil
-}
-
 func listGeminiModels(ctx context.Context, cfg Config) ([]string, error) {
 	base := strings.TrimRight(cfg.BaseURL, "/")
 	url := base + "/v1beta/models"

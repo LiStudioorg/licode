@@ -282,7 +282,7 @@ func TestToolPipeline(t *testing.T) {
 
 	registry := toolRegistry(t, r)
 	// 放行 + 改写 + post。
-	out, err := registry.Execute(nil, "Echo", map[string]any{"x": 1})
+	out, err := registry.Execute(context.Background(), "Echo", map[string]any{"x": 1})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -290,14 +290,14 @@ func TestToolPipeline(t *testing.T) {
 		t.Fatalf("out = %v", out)
 	}
 	// 短路拒绝。
-	out, _ = registry.Execute(nil, "Echo", map[string]any{"deny": true})
+	out, _ = registry.Execute(context.Background(), "Echo", map[string]any{"deny": true})
 	if out != "denied by guard" {
 		t.Fatalf("deny out = %v", out)
 	}
 	// 未知工具。
-	_, err = registry.ExecuteResult(nil, "Nope", nil)
 	// 未知工具作为 ToolResult.Err 返回，Execute 透传该 error。
-	_, err = registry.Execute(nil, "Nope", nil)
+	_, err = registry.ExecuteResult(context.Background(), "Nope", nil)
+	_, err = registry.Execute(context.Background(), "Nope", nil)
 	if !errors.Is(err, ErrToolUnknown) {
 		t.Fatalf("unknown tool err = %v", err)
 	}

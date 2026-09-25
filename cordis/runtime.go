@@ -167,9 +167,10 @@ func (r *Runtime) Status() []FiberStatus {
 		if f == nil {
 			continue
 		}
-		f.mu.Lock()
+		// 不得在持有 f.mu 时调用 getState()：getState 自己也拿 f.mu，
+		// sync.Mutex 不可重入，Status() 一旦被调用即自死锁。
+		// injects 仅在 fiber 构造时写入、之后只读，无需持锁。
 		out = append(out, FiberStatus{Name: f.id, State: f.getState(), Inject: f.injects})
-		f.mu.Unlock()
 	}
 	return out
 }
@@ -182,9 +183,11 @@ type FiberStatus struct {
 }
 
 // WaitIdle 等待当前生命周期操作完成（测试与热路径同步用）。
+// 通过 acquire/release 一个零容量 channel 表达“排空到当前操作结束”，
+// 与 actMu 的串行语义一致，且空临界区不会被误读成遗漏逻辑。
 func (r *Runtime) WaitIdle() {
 	r.actMu.Lock()
-	r.actMu.Unlock()
+	defer r.actMu.Unlock()
 }
 
 // Shutdown 按加载逆序卸载全部插件并清空服务总线。

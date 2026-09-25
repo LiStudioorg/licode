@@ -22,7 +22,7 @@ func TestClaudeBuildBodyCacheControl(t *testing.T) {
 	}
 
 	// 关闭缓存：system 为字符串（与改动前逐字节一致的形态）。
-	b, err := p.buildBody(ChatRequest{System: "SYS", Messages: []Message{{Role: RoleUser, Content: "hi"}}, Tools: tools})
+	b, err := p.buildBody(ChatRequest{System: "SYS", Messages: []Message{{Role: RoleUser, Content: "hi"}}, Tools: tools}, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -37,13 +37,13 @@ func TestClaudeBuildBodyCacheControl(t *testing.T) {
 	}
 
 	// system 为空且关闭缓存：system 字段应被省略（omitempty 行为）。
-	b, _ = p.buildBody(ChatRequest{System: "", Messages: []Message{{Role: RoleUser, Content: "hi"}}})
+	b, _ = p.buildBody(ChatRequest{System: "", Messages: []Message{{Role: RoleUser, Content: "hi"}}}, true)
 	if _, has := decodeBody(t, b)["system"]; has {
 		t.Fatal("empty system must be omitted when cache off")
 	}
 
 	// 开启缓存 + system：system 为数组块且带 ephemeral 断点。
-	b, err = p.buildBody(ChatRequest{System: "SYS", PromptCache: true, Messages: []Message{{Role: RoleUser, Content: "hi"}}, Tools: tools})
+	b, err = p.buildBody(ChatRequest{System: "SYS", PromptCache: true, Messages: []Message{{Role: RoleUser, Content: "hi"}}, Tools: tools}, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -61,7 +61,7 @@ func TestClaudeBuildBodyCacheControl(t *testing.T) {
 	}
 
 	// 开启缓存但 system 为空 + 有工具：断点退到最后一个工具。
-	b, _ = p.buildBody(ChatRequest{System: "", PromptCache: true, Messages: []Message{{Role: RoleUser, Content: "hi"}}, Tools: tools})
+	b, _ = p.buildBody(ChatRequest{System: "", PromptCache: true, Messages: []Message{{Role: RoleUser, Content: "hi"}}, Tools: tools}, true)
 	m = decodeBody(t, b)
 	if _, has := m["system"]; has {
 		t.Fatal("empty system still omitted even with cache on")

@@ -147,7 +147,7 @@ func strToJSON(s string) []byte {
 	return b
 }
 
-func (p *ClaudeProvider) buildBody(req ChatRequest) ([]byte, error) {
+func (p *ClaudeProvider) buildBody(req ChatRequest, stream bool) ([]byte, error) {
 	msgs := make([]anthropicMsg, 0, len(req.Messages))
 	for _, m := range req.Messages {
 		msgs = append(msgs, toAnthropicMsg(m))
@@ -180,7 +180,7 @@ func (p *ClaudeProvider) buildBody(req ChatRequest) ([]byte, error) {
 		Messages:  msgs,
 		Tools:     tools,
 		MaxTokens: req.MaxTokens,
-		Stream:    true,
+		Stream:    stream,
 	}
 	if body.MaxTokens == 0 {
 		body.MaxTokens = 4096
@@ -192,10 +192,10 @@ func (p *ClaudeProvider) buildBody(req ChatRequest) ([]byte, error) {
 	return json.Marshal(body)
 }
 
-func (p *ClaudeProvider) do(ctx context.Context, req ChatRequest) (*http.Response, error) {
+func (p *ClaudeProvider) do(ctx context.Context, req ChatRequest, stream bool) (*http.Response, error) {
 	var resp *http.Response
 	err := WithRetry(p.retry, func() error {
-		payload, err := p.buildBody(req)
+		payload, err := p.buildBody(req, stream)
 		if err != nil {
 			return err
 		}
@@ -222,8 +222,10 @@ func (p *ClaudeProvider) do(ctx context.Context, req ChatRequest) (*http.Respons
 }
 
 // Chat performs a non-streaming completion.
+// 必须显式以 stream:false 请求：此前 buildBody 硬编码 stream:true，
+// 非流式解码 SSE 必然失败，标题生成/缓存预热在 Claude 上一直静默失效。
 func (p *ClaudeProvider) Chat(ctx context.Context, req ChatRequest) (string, error) {
-	resp, err := p.do(ctx, req)
+	resp, err := p.do(ctx, req, false)
 	if err != nil {
 		return "", err
 	}
@@ -261,7 +263,7 @@ type claudeToolBlock struct {
 
 // ChatStream streams text deltas and completed tool calls.
 func (p *ClaudeProvider) ChatStream(ctx context.Context, req ChatRequest, onEvent func(StreamEvent) error) error {
-	resp, err := p.do(ctx, req)
+	resp, err := p.do(ctx, req, true)
 	if err != nil {
 		return err
 	}
@@ -333,8 +335,12 @@ func (p *ClaudeProvider) handleEvent(name string, data []byte, toolUse map[int]*
 			} `json:"message"`
 		}
 		if err := json.Unmarshal(payload, &ev); err == nil {
-			usage.InputTokens += ev.Message.Usage.InputTokens
-			usage.CachedTokens += ev.Message.Usage.CacheRead + ev.Message.Usage.CacheCreate
+			// Anthropic 的 input_tokens 只含未缓存部分；与其它 Provider 对齐
+			// （OpenAI prompt_tokens 含 cached），总输入 = input + cache_read + cache_create，
+			// 命中只记 cache_read。否则 cache_creation 被误记为命中、命中率虚高，
+			// 且总输入被低估导致命中率 >100%。
+			usage.InputTokens += ev.Message.Usage.InputTokens + ev.Message.Usage.CacheRead + ev.Message.Usage.CacheCreate
+			usage.CachedTokens += ev.Message.Usage.CacheRead
 		}
 	case "message_delta":
 		var ev struct {

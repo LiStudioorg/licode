@@ -8,6 +8,7 @@ import (
 	"os"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 )
 
 var (
@@ -78,7 +79,13 @@ func AgentError(traceID, agent, errMsg string) {
 func truncate(s string) string {
 	const max = 1000
 	if len(s) > max {
-		return s[:max] + "...(truncated)"
+		// 按字节切会把多字节 UTF-8 字符拦腰截断，产生非法 JSON 字符串/乱码；
+		// 回退到最近的法律字符边界。
+		end := max
+		for end > 0 && !utf8.RuneStart(s[end]) {
+			end--
+		}
+		return s[:end] + "...(truncated)"
 	}
 	return s
 }

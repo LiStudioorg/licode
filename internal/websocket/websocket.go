@@ -6,12 +6,14 @@ package websocket
 import (
 	"context"
 	"encoding/json"
+	"runtime/debug"
 	"log"
 	"net"
 	"net/http"
 	"net/url"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/gorilla/websocket"
 )
@@ -116,24 +118,48 @@ var upgrader = websocket.Upgrader{
 		if origin == "" {
 			return true
 		}
-		return originMatchesHost(origin, r.Host)
+		return originMatchesHost(origin, r)
 	},
 }
 
-// originMatchesHost 校验 Origin 与请求 Host 是否同源（兼容默认端口的差异）。
-func originMatchesHost(origin, host string) bool {
+const (
+	// wsWriteWait 单次写超时：客户端 TCP 卡死时不会让 writePump 永久阻塞。
+	wsWriteWait = 15 * time.Second
+	// wsPongWait 允许的最大静默时长，必须大于客户端 ping 间隔。
+	wsPongWait = 75 * time.Second
+	// wsPingPeriod 服务端心跳间隔（约为 PongWait 的 4/5，确保先于超时探测到死链）。
+	wsPingPeriod = 60 * time.Second
+)
+
+// originMatchesHost 校验 Origin 与请求是否同源（端口敏感）。
+// 只比主机名会让同机跨端口的站点（如恶意页面跑在 127.0.0.1:9999）通过校验，
+// 借浏览器自动携带的会话 Cookie 直连本地 ws:// 接口。
+func originMatchesHost(origin string, r *http.Request) bool {
 	u, err := url.Parse(origin)
 	if err != nil || u.Host == "" {
 		return false
 	}
+	host := r.Host
 	if strings.EqualFold(u.Host, host) {
 		return true
 	}
-	h := host
-	if hh, _, e := net.SplitHostPort(host); e == nil {
-		h = hh
+	defPort := "80"
+	if r.TLS != nil || strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https") {
+		defPort = "443"
 	}
-	return strings.EqualFold(u.Hostname(), h)
+	op := u.Port()
+	if op == "" {
+		if u.Scheme == "wss" || u.Scheme == "https" {
+			op = "443"
+		} else {
+			op = "80"
+		}
+	}
+	h, hp, e := net.SplitHostPort(host)
+	if e != nil {
+		h, hp = host, defPort
+	}
+	return strings.EqualFold(u.Hostname(), h) && op == hp
 }
 
 // Handler is called with each client that connects. The Hub does not know
@@ -184,6 +210,21 @@ func (h *Hub) ServeWS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	c := NewClient(h, conn)
+	// 心跳基础：任何 pong（以及我们自己的 ping 的回声）都顺延读超时，
+	// 半开连接（客户端断电/拔网线）最迟 wsPongWait 后在 ReadMessage 上超时退出，
+	// 不再永久占用 goroutine 与 connState。
+	conn.SetReadLimit(8 << 20)
+	_ = conn.SetReadDeadline(time.Now().Add(wsPongWait))
+	conn.SetPongHandler(func(string) error {
+		return conn.SetReadDeadline(time.Now().Add(wsPongWait))
+	})
+	conn.SetPingHandler(func(data string) error {
+		if err := conn.SetReadDeadline(time.Now().Add(wsPongWait)); err != nil {
+			return err
+		}
+		// 与 gorilla 默认行为一致：回应协议层 pong（覆盖默认 handler 后须自己回）。
+		return conn.WriteControl(websocket.PongMessage, []byte(data), time.Now().Add(wsWriteWait))
+	})
 	h.register(c)
 
 	ctx, cancel := context.WithCancel(r.Context())
@@ -250,16 +291,28 @@ func (c *Client) SendRaw(data []byte) {
 }
 
 func (c *Client) writePump(ctx context.Context) {
+	ticker := time.NewTicker(wsPingPeriod)
+	defer ticker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return
+		case <-ticker.C:
+			// 服务端主动心跳：探测半开连接，同时让中间层（反代/ NAT）不因空闲切断。
+			c.mu.Lock()
+			_ = c.conn.SetWriteDeadline(time.Now().Add(wsWriteWait))
+			err := c.conn.WriteMessage(websocket.PingMessage, nil)
+			c.mu.Unlock()
+			if err != nil {
+				return
+			}
 		case data, ok := <-c.send:
 			if !ok {
 				c.conn.WriteMessage(websocket.CloseMessage, []byte{})
 				return
 			}
 			c.mu.Lock()
+			_ = c.conn.SetWriteDeadline(time.Now().Add(wsWriteWait))
 			err := c.conn.WriteMessage(websocket.TextMessage, data)
 			c.mu.Unlock()
 			if err != nil {
@@ -278,8 +331,11 @@ func (c *Client) readPump(ctx context.Context) {
 	for {
 		_, data, err := c.conn.ReadMessage()
 		if err != nil {
+			// 含读超时（半开连接心跳失败）：直接退出，defer 关闭连接与队列。
 			return
 		}
+		// 有业务消息即视为链路存活，顺延读超时（前端持续有交互时不依赖 ping）。
+		_ = c.conn.SetReadDeadline(time.Now().Add(wsPongWait))
 		var msg ClientMessage
 		if err := json.Unmarshal(data, &msg); err != nil {
 			continue
@@ -297,9 +353,17 @@ func (c *Client) readPump(ctx context.Context) {
 
 func (c *Client) processMessages(ctx context.Context) {
 	for msg := range c.msgQueue {
-		if c.onUserMessage != nil {
-			c.onUserMessage(ctx, msg)
-		}
+		// 单条消息处理 panic 不允许击穿整个进程：捕获后记录并继续服务。
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					log.Printf("websocket 消息处理 panic: %v\n%s", r, debug.Stack())
+				}
+			}()
+			if c.onUserMessage != nil {
+				c.onUserMessage(ctx, msg)
+			}
+		}()
 	}
 }
 

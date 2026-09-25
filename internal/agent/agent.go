@@ -423,8 +423,7 @@ func NewAgent(client ai.LLMClient, system string) *Agent {
 // Run executes a user request, streaming events through onEvent.
 // It returns after the reply completes or an error occurs.
 func (a *Agent) Run(ctx context.Context, input string, onEvent func(Event)) error {
-	a.RunWithAttachments(ctx, input, nil, func(e Event) error { onEvent(e); return nil })
-	return nil
+	return a.RunWithAttachments(ctx, input, nil, func(e Event) error { onEvent(e); return nil })
 }
 
 // RunWithAttachments 执行请求并附带多模态附件（图片/文件）。
@@ -450,9 +449,43 @@ func (a *Agent) RunWithAttachments(ctx context.Context, input string, attachment
 	}
 	a.Session.Add(ai.Message{Role: ai.RoleUser, Content: input, Attachments: attachments})
 
+	// executed 记录本次运行中已真正执行过（并已写入 tool 结果）的 tool_call_id。
+	// 达到迭代上限时补写合成结果必须跳过它们：否则同一个 tool_call_id 会出现两条
+	// tool 消息，Anthropic/OpenAI 都会拒绝该请求（后续整段对话永久 400）。
+	executed := map[string]bool{}
+	// closeOrphans 为 asst 中尚未拿到结果的 tool_calls 补写合成结果，
+	// 保证会话里不存在「有调用无结果」的孤儿消息。
+	closeOrphans := func(m ai.Message, reason string) {
+		for _, tc := range m.ToolCalls {
+			if tc.ID == "" || executed[tc.ID] {
+				continue
+			}
+			executed[tc.ID] = true
+			a.Session.Add(ai.Message{
+				Role: ai.RoleTool, ToolCallID: tc.ID, ToolName: tc.Function.Name,
+				Content: "TOOL ERROR: " + reason,
+			})
+		}
+	}
+	// endWithFailure 在任何异常退出路径上把会话补成合法状态：
+	// 先补齐孤儿 tool 结果，再保证会话不以孤立的 user 消息收尾——
+	// 孤立 user 会让下一轮请求因角色不交替（Anthropic 等）直接 400，
+	// 会话从此永久不可用，因此补一条占位 assistant 说明本次失败。
+	endWithFailure := func(m ai.Message, reason string) {
+		closeOrphans(m, reason)
+		if a.Session.LastRole() != ai.RoleAssistant {
+			a.Session.Add(ai.Message{
+				Role:    ai.RoleAssistant,
+				Content: "[本轮请求未完成：" + reason + "]",
+			})
+		}
+	}
+
 	var asst ai.Message
 	for iter := 1; iter <= a.MaxIterations; iter++ {
 		if err := ctx.Err(); err != nil {
+			// asst 此时是上一轮带 tool_calls 的助手消息。
+			endWithFailure(asst, "interrupted before execution")
 			return err
 		}
 		onEvent(Event{Type: EventStatus, Content: fmt.Sprintf("思考中 (%d)", iter)})
@@ -482,6 +515,7 @@ func (a *Agent) RunWithAttachments(ctx context.Context, input string, attachment
 			out, werr := a.Cordis.Waterfall(cordis.EventAgentPreStep,
 				StepInput{Iteration: iter, System: req.System, Messages: req.Messages, Tools: req.Tools}, nil)
 			if werr != nil {
+				endWithFailure(asst, werr.Error())
 				onEvent(Event{Type: EventError, Error: werr.Error()})
 				return werr
 			}
@@ -515,6 +549,9 @@ func (a *Agent) RunWithAttachments(ctx context.Context, input string, attachment
 			return nil
 		})
 		if callErr != nil {
+			// 会话此刻以本轮 user 消息结尾（asst 尚未入库），补占位 assistant，
+			// 否则下一轮请求会因消息角色不交替被 API 拒绝（400）。
+			endWithFailure(asst, callErr.Error())
 			// 用户主动停止（context canceled）不算错误，不推错误事件
 			if !errors.Is(callErr, context.Canceled) {
 				onEvent(Event{Type: EventError, Error: callErr.Error()})
@@ -528,6 +565,7 @@ func (a *Agent) RunWithAttachments(ctx context.Context, input string, attachment
 			out, werr := a.Cordis.Waterfall(cordis.EventAgentPostStep,
 				StepOutput{Iteration: iter, Message: asst}, nil)
 			if werr != nil {
+				endWithFailure(asst, werr.Error())
 				onEvent(Event{Type: EventError, Error: werr.Error()})
 				return werr
 			}
@@ -547,6 +585,7 @@ func (a *Agent) RunWithAttachments(ctx context.Context, input string, attachment
 		// Execute tool calls sequentially (order from the model).
 		for _, tc := range asst.ToolCalls {
 			if err := ctx.Err(); err != nil {
+				endWithFailure(asst, "interrupted during tool execution")
 				return err
 			}
 			onEvent(Event{Type: EventToolStart, ToolName: tc.Function.Name, ToolArgs: tc.Function.Arguments})
@@ -567,16 +606,15 @@ func (a *Agent) RunWithAttachments(ctx context.Context, input string, attachment
 			logx.ToolCall(a.TraceID, tc.Function.Name, args, out)
 			onEvent(Event{Type: EventToolDone, ToolName: tc.Function.Name, ToolOut: out})
 			a.Session.Add(ai.Message{Role: ai.RoleTool, ToolCallID: tc.ID, ToolName: tc.Function.Name, Content: out})
+			if tc.ID != "" {
+				executed[tc.ID] = true
+			}
 		}
 	}
-	// 达到迭代上限时助手消息可能带有未执行完的 tool_calls；补写合成结果，
-	// 避免会话里留下"有调用无结果"的孤儿消息导致后续 API 请求被 400 拒绝。
-	for _, tc := range asst.ToolCalls {
-		a.Session.Add(ai.Message{
-			Role: ai.RoleTool, ToolCallID: tc.ID, ToolName: tc.Function.Name,
-			Content: "TOOL ERROR: reached max iterations without a final answer",
-		})
-	}
+	// 达到迭代上限时助手消息可能带有未执行完的 tool_calls；只为「尚未执行」的
+	// 调用补写合成结果（executed 集合去重），避免同一 tool_call_id 出现两条
+	// tool 消息毒化后续所有请求。再补占位 assistant，会话保持可继续状态。
+	endWithFailure(asst, "reached max iterations without a final answer")
 	onEvent(Event{Type: EventStats, Stats: snapshotPtr(a.snapshotStats())})
 	onEvent(Event{Type: EventError, Error: "已达最大迭代次数，未得到最终回答"})
 	return errors.New("max iterations reached without a final answer")
@@ -625,26 +663,41 @@ func (a *Agent) permissionMode(tool string) string {
 	return "allow"
 }
 
+// permissionGate 内嵌执行 deny/ask/plan 检查，返回 (拒绝输出, 是否被拒)。
+// cordis 权限监听器只在 Pipeline.Execute 路径上生效；MCP/技能/热加载工具经
+// a.Tools 回退执行时不经过监听器，必须在回退前内嵌同一套门禁，否则
+// deny/ask 配置与 plan 只读模式可被这些工具直接旁路。
+func (a *Agent) permissionGate(ctx context.Context, tc ai.ToolCall) (string, bool) {
+	if a.Mode == ModePlan && !IsReadOnlyTool(tc.Function.Name) {
+		return "plan 模式只读：工具 " + tc.Function.Name + " 不可用（需要修改工作区请使用 /build）", true
+	}
+	switch a.permissionMode(tc.Function.Name) {
+	case "deny":
+		return "已拒绝执行 " + tc.Function.Name + "（权限配置为禁止）", true
+	case "ask":
+		if a.Ask != nil {
+			ok, aerr := a.Ask(ctx, tc.Function.Name, tc.Function.Arguments)
+			if aerr != nil {
+				return "", false // 交由执行路径返回真实错误
+			}
+			if !ok {
+				return "用户拒绝执行工具 " + tc.Function.Name, true
+			}
+		} else {
+			// Ask 未接线时按拒绝处理，避免“ask”静默放行高风险工具。
+			return "已拒绝执行 " + tc.Function.Name + "（需人工确认，但当前无确认通道）", true
+		}
+	}
+	return "", false
+}
+
 // runTool 执行单个工具，先做权限检查；支持迭代式自动重试。
-// Pipeline 非空时权限/确认/脱敏策略已外置到 cordis 监听器，这里仅负责执行。
+// 工具在 cordis Pipeline 注册时权限/确认/脱敏策略由监听器负责；
+// 其余（MCP/技能/热加载工具经 a.Tools 回退）先过内嵌 permissionGate。
 func (a *Agent) runTool(ctx context.Context, tc ai.ToolCall, onEvent func(Event) error) (string, error) {
 	if a.Pipeline == nil {
-		switch a.permissionMode(tc.Function.Name) {
-		case "deny":
-			return "已拒绝执行 " + tc.Function.Name + "（权限配置为禁止）", nil
-		case "ask":
-			if a.Ask != nil {
-				ok, aerr := a.Ask(ctx, tc.Function.Name, tc.Function.Arguments)
-				if aerr != nil {
-					return "", aerr
-				}
-				if !ok {
-					return "用户拒绝执行工具 " + tc.Function.Name, nil
-				}
-			} else {
-				// Ask 未接线时按拒绝处理，避免“ask”静默放行高风险工具。
-				return "已拒绝执行 " + tc.Function.Name + "（需人工确认，但当前无确认通道）", nil
-			}
+		if msg, denied := a.permissionGate(ctx, tc); denied {
+			return msg, nil
 		}
 	}
 	var out string
@@ -677,6 +730,11 @@ func (a *Agent) runTool(ctx context.Context, tc ai.ToolCall, onEvent func(Event)
 				}
 				return a.Pipeline.Execute(ctx, tc.Function.Name, args)
 			}
+		}
+		// Pipeline 未注册该工具（MCP/技能/外部命令热加载工具等）：
+		// 执行不经过 cordis 权限监听器，先补内嵌门禁再回退执行。
+		if msg, denied := a.permissionGate(ctx, tc); denied {
+			return msg, nil
 		}
 		return a.Tools.Execute(ctx, tc.Function.Name, []byte(tc.Function.Arguments))
 	}

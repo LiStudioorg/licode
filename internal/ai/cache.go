@@ -20,18 +20,26 @@ import (
 // 为简化部署，不引入向量数据库：通过归一化（大小写、空白、标点）捕获常见改写。
 // 轻量实现，单进程内内存 + 磁盘持久化两层。
 type Cache struct {
-	dir  string
-	ttl  time.Duration
-	mu   sync.Mutex
-	mem  map[string]cacheEntry
-	wg   sync.WaitGroup // 追踪未落盘的异步写，供 Flush 等待
-	miss int            // 抖动统计（可选）
+	dir string
+	ttl time.Duration
+	mu  sync.Mutex
+	mem map[string]cacheEntry
+	wg  sync.WaitGroup // 追踪未落盘的异步写，供 Flush 等待
 }
 
 type cacheEntry struct {
 	key       string
 	content   string
 	createdAt time.Time
+}
+
+// diskRecord 是 cacheEntry 的磁盘形态。必须用导出字段：
+// cacheEntry 字段全小写，json.Marshal 只会写出 "{}"——
+// 旧实现直接把 cacheEntry 塞进 Marshal，磁盘缓存层从未真正生效过。
+type diskRecord struct {
+	Key       string    `json:"key"`
+	Content   string    `json:"content"`
+	CreatedAt time.Time `json:"created_at"`
 }
 
 // NewCache 创建指定目录与 TTL 的缓存；目录不存在会自动创建。
@@ -124,9 +132,9 @@ func (c *Cache) Put(key, content string) {
 		defer c.wg.Done()
 		path := filepath.Join(dir, key+".json")
 		_ = os.MkdirAll(dir, 0o755)
-		data, err := json.Marshal(cacheEntry{key: key, content: content, createdAt: time.Now()})
+		data, err := json.Marshal(diskRecord{Key: key, Content: content, CreatedAt: time.Now()})
 		if err == nil {
-			_ = os.WriteFile(path, data, 0o644)
+			_ = os.WriteFile(path, data, 0o600)
 		}
 	}()
 }
@@ -141,15 +149,15 @@ func (c *Cache) readDisk(key string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	var e cacheEntry
+	var e diskRecord
 	if err := json.Unmarshal(data, &e); err != nil {
 		return "", err
 	}
-	if time.Since(e.createdAt) >= c.ttl {
+	if time.Since(e.CreatedAt) >= c.ttl {
 		_ = os.Remove(path)
 		return "", fmt.Errorf("expired")
 	}
-	return e.content, nil
+	return e.Content, nil
 }
 
 // cachedClient 包装底层 LLMClient，在命中时直接返回缓存结果。
@@ -194,13 +202,19 @@ func (c *cachedClient) ChatStream(ctx context.Context, req ChatRequest, onEvent 
 			return onEvent(StreamEvent{Done: true, Usage: &Usage{}})
 		}
 		var sb strings.Builder
+		sawToolCall := false
 		err := c.inner.ChatStream(ctx, req, func(ev StreamEvent) error {
 			if ev.Content != "" {
 				sb.WriteString(ev.Content)
 			}
+			// 工具调用会破坏缓存的完整性：只存文本会把“要调工具的回答”
+			// 缓存成纯文本，下次命中时工具被静默吞掉、结果凭空蒸发。
+			if ev.ToolCall != nil {
+				sawToolCall = true
+			}
 			return onEvent(ev)
 		})
-		if err == nil {
+		if err == nil && !sawToolCall {
 			c.cache.Put(key, sb.String())
 		}
 		return err

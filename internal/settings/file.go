@@ -127,6 +127,21 @@ func (s *Settings) mergeFrom(o *Settings) {
 	if o.RAGTopFiles != 0 {
 		s.RAGTopFiles = o.RAGTopFiles
 	}
+	// DNS 配置必须参与合并：此前遗漏导致 config.json 里的 DNS 设置读入即丢，
+	// 重启后 finalize() 又用默认解析器覆盖——用户在设置页配置的 DNS 全部失效。
+	if o.DNS != nil {
+		d := *o.DNS
+		if len(o.DNS.Servers) > 0 {
+			d.Servers = append([]dnsclient.Server{}, o.DNS.Servers...)
+		}
+		if len(o.DNS.HostOverrides) > 0 {
+			d.HostOverrides = map[string]string{}
+			for k, v := range o.DNS.HostOverrides {
+				d.HostOverrides[k] = v
+			}
+		}
+		s.DNS = &d
+	}
 }
 
 // Save 把设置写入配置文件（默认 SavePath）。

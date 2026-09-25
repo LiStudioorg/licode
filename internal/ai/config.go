@@ -15,8 +15,12 @@ import (
 // NewLLMHTTPClient 构造一个 *http.Client，并依据 DNS 配置注入自定义解析器。
 // TLS 只信任内置 cacert.pem 权威 CA；InsecureSSL 为 true 时跳过校验（仅限
 // 自签名证书等受控场景）。
+//
+// 超时只设 Transport 级（拨号/TLS 握手/响应头），绝不设 Client.Timeout：
+// Client.Timeout 覆盖“读完整响应体”的全过程，而 LLM 流式响应可持续数分钟，
+// 到点会被拦腰截断（表现为流式中途 EOF）。整体兜底由调用方的 ctx 取消负责。
 func (c Config) NewLLMHTTPClient(timeout time.Duration) *http.Client {
-	client := &http.Client{Timeout: timeout}
+	client := &http.Client{}
 	tlsCfg := &tls.Config{InsecureSkipVerify: c.InsecureSSL} //nolint:gosec // 用户显式选择忽略证书校验
 	if !c.InsecureSSL {
 		// 内置权威 CA + 用户自定义 CA（~/.licode/certs/）；embed 损坏时回退系统池。
@@ -24,7 +28,11 @@ func (c Config) NewLLMHTTPClient(timeout time.Duration) *http.Client {
 			tlsCfg.RootCAs = pool
 		}
 	}
-	transport := &http.Transport{TLSClientConfig: tlsCfg, TLSHandshakeTimeout: 15 * time.Second, ResponseHeaderTimeout: timeout}
+	transport := &http.Transport{
+		TLSClientConfig:       tlsCfg,
+		TLSHandshakeTimeout:   15 * time.Second,
+		ResponseHeaderTimeout: timeout,
+	}
 	if c.DNS != nil && c.DNS.Resolver() != nil {
 		transport.DialContext = c.DNS.Resolver()
 	}

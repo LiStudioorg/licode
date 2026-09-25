@@ -83,7 +83,9 @@ func allowedImportPath(rel string) bool {
 	if rel == "config.json" || rel == "system-prompt.md" {
 		return true
 	}
-	for _, p := range []string{"skills/", "md-prompt/", "sessions/"} {
+	// 附加提示词目录实为 md/（settings.MDPromptDir），旧值 md-prompt/ 与导出
+	// 相对路径对不上，导致备份包里的 md/*.md 导入时被判为非法路径而断裂。
+	for _, p := range []string{"skills/", "md/", "sessions/"} {
 		if strings.HasPrefix(rel, p) {
 			return true
 		}
@@ -104,6 +106,10 @@ func Import(data []byte, dest string) error {
 		clean := filepath.Clean(f.Name)
 		if strings.Contains(clean, "..") || filepath.IsAbs(clean) {
 			return fmt.Errorf("非法路径 %q", f.Name)
+		}
+		// 兼容旧版备份包：附加提示词目录曾叫 md-prompt/，现统一为 md/。
+		if rel := strings.TrimPrefix(clean, "md-prompt"+string(filepath.Separator)); rel != clean {
+			clean = filepath.Join("md", rel)
 		}
 		if !allowedImportPath(clean) {
 			return fmt.Errorf("不允许导入的路径 %q", f.Name)

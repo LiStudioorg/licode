@@ -179,8 +179,16 @@ func newDNSQuery(domain string, qtype uint16) []byte {
 		if label == "" {
 			continue
 		}
+		// 边界：DNS 标签长度是 1 字节（<=63 为规范值）。不加限制时超长子域
+		// 会把长度字节溢出成别的值，发出畸形查询、解析器按错位继续读响应。
+		if len(label) > 63 {
+			return nil
+		}
 		buf.WriteByte(byte(len(label)))
 		buf.WriteString(label)
+	}
+	if len(domain) > 253 {
+		return nil
 	}
 	buf.WriteByte(0)
 	binary.Write(&buf, binary.BigEndian, qtype)
@@ -281,6 +289,9 @@ func dohQuery(ctx context.Context, server, host string, qtype uint16) ([]net.IP,
 	if !strings.HasPrefix(url, "http://") && !strings.HasPrefix(url, "https://") {
 		url = "https://" + url
 	}
+	if query == nil {
+		return nil, fmt.Errorf("DNS 查询名过长或非法: %s", host)
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(query))
 	if err != nil {
 		return nil, err
@@ -304,10 +315,16 @@ func dohQuery(ctx context.Context, server, host string, qtype uint16) ([]net.IP,
 }
 
 func dotQuery(ctx context.Context, server, host string, qtype uint16) ([]net.IP, error) {
-	if !strings.Contains(server, ":") {
-		server += ":853"
+	// 用 SplitHostPort/JoinHostPort 而非字符串拼接：裸 IPv6（含冒号）
+	// 会被旧逻辑误判为“已带端口”。显式配置的端口必须保留（如自建 8443 的 DoT），
+	// 只有确实不带端口时才补默认 853。
+	hostOnly := server
+	if _, _, err := net.SplitHostPort(server); err != nil {
+		server = net.JoinHostPort(server, "853")
+		hostOnly = server[:strings.LastIndex(server, ":")]
+	} else if h, _, e := net.SplitHostPort(server); e == nil {
+		hostOnly = h
 	}
-	hostOnly := server[:strings.LastIndex(server, ":")]
 	d := &net.Dialer{Timeout: 8 * time.Second}
 	conn, err := d.DialContext(ctx, "tcp", server)
 	if err != nil {
@@ -319,6 +336,9 @@ func dotQuery(ctx context.Context, server, host string, qtype uint16) ([]net.IP,
 		return nil, err
 	}
 	query := newDNSQuery(host, qtype)
+	if query == nil {
+		return nil, fmt.Errorf("DNS 查询名过长或非法: %s", host)
+	}
 	var msg bytes.Buffer
 	binary.Write(&msg, binary.BigEndian, uint16(len(query)))
 	msg.Write(query)

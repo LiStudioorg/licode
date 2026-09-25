@@ -159,6 +159,17 @@ func (s *Scheduler) Run(ctx context.Context, tasks []Task) (map[string]SubAgentR
 			wg.Add(1)
 			go func(t Task) {
 				defer wg.Done()
+				// 单个子代理 panic 不允许击穿整个进程：就地捕获并转成任务错误。
+				defer func() {
+					if r := recover(); r != nil {
+						mu.Lock()
+						results[t.Name] = SubAgentResult{
+							Name:  t.Name,
+							Error: fmt.Sprintf("sub-agent %q panicked: %v", t.Name, r),
+						}
+						mu.Unlock()
+					}
+				}()
 				res := s.runTask(ctx, t)
 				mu.Lock()
 				results[t.Name] = res
