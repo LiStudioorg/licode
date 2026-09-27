@@ -1,4 +1,4 @@
-// Package web embeds the Nuxt frontend served by cmd/serve.
+// Package web embeds the SPA frontend served by cmd/serve.
 // 前端产物全部打包进二进制，运行时不依赖外网/CDN。
 package web
 
@@ -13,12 +13,12 @@ import (
 	"sync"
 )
 
-// NuxtFS 嵌入的 Nuxt 静态前端产物（由 nuxtweb/dist 生成，见 scripts/sync-nuxt.sh）。
-// cmd/serve.go 用它提供主页/登录页/设置页/工具页与 /_nuxt/ 资源。
-// 注意：必须用 all: 前缀，否则 _nuxt/ 目录会被 embed 默认规则排除。
+// staticFS 嵌入的 SPA 静态前端产物（由 web/dist 生成，见 scripts/sync-web.sh）。
+// cmd/serve.go 用它提供主页与 /assets/ 资源，cmd/auth.go 用它提供登录页。
+// 注意：必须用 all: 前缀，否则以 _ 开头的目录会被 embed 默认规则排除。
 //
-//go:embed all:nuxt
-var nuxtFS embed.FS
+//go:embed all:dist
+var staticFS embed.FS
 
 // CACertPEM 嵌入的权威 CA 根证书束（https://curl.se/ca/cacert.pem，Mozilla CA 列表）。
 // internal/ai 与 internal/agent 构造 HTTP 客户端时用它作为唯一信任来源，
@@ -118,17 +118,27 @@ var (
 	mergedFp    string
 )
 
-// NuxtFS 返回挂载在 / 与 /_nuxt/ 下的 Nuxt 静态前端文件系统。
-// 目录结构：index.html（主页）、login/、settings/、tools/、_nuxt/（JS/CSS）。
-func NuxtFS() fs.FS {
-	sub, err := fs.Sub(nuxtFS, "nuxt")
+// StaticFS 返回挂载在 / 与 /assets/ 下的 SPA 静态前端文件系统。
+// 目录结构：index.html（唯一入口，前端路由由其接管）、assets/（JS/CSS）。
+func StaticFS() fs.FS {
+	sub, err := fs.Sub(staticFS, "dist")
 	if err != nil {
 		panic(err)
 	}
 	return sub
 }
 
-// ReadNuxt 读取 Nuxt 静态前端中的一个文件（相对路径，如 "login/index.html"）。
-func ReadNuxt(name string) ([]byte, error) {
-	return fs.ReadFile(nuxtFS, "nuxt/"+name)
+// ReadStatic 读取静态前端中的一个文件（相对路径，如 "index.html"）。
+func ReadStatic(name string) ([]byte, error) {
+	return fs.ReadFile(staticFS, "dist/"+name)
 }
+
+// NuxtFS 保留旧名以免破坏既有调用方，语义等同于 StaticFS。
+//
+// Deprecated: 使用 StaticFS。
+func NuxtFS() fs.FS { return StaticFS() }
+
+// ReadNuxt 保留旧名以免破坏既有调用方，语义等同于 ReadStatic。
+//
+// Deprecated: 使用 ReadStatic。
+func ReadNuxt(name string) ([]byte, error) { return ReadStatic(name) }

@@ -40,6 +40,25 @@ type Session struct {
 	mode        string   // 运行模式：build/plan（plan=只读）；空按 build 处理
 	onChange    func()
 	alwaysAllow map[string]bool
+	pinned      bool // 置顶：列表中恒定排在未置顶项之前
+}
+
+// Pinned 返回会话是否置顶。
+func (s *Session) Pinned() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.pinned
+}
+
+// SetPinned 设置置顶状态。
+//
+// 注意：这里不触发 onChange 回调。onChange 的实现是 Manager.SaveSession，
+// 而它要重新获取 Manager 的锁；调用方（Manager.SetPinned）已持有该锁，
+// 在锁内回调会直接死锁。置顶状态的落盘由 Manager.SetPinned 自己负责。
+func (s *Session) SetPinned(v bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.pinned = v
 }
 
 // SetOnChange 设置消息变化回调（用于实时落盘）。
@@ -121,7 +140,11 @@ func (s *Session) Restore(title string, msgs []ai.Message, summary string) {
 	if title != "" {
 		s.title = title
 	}
-	s.messages = append(s.messages, msgs...)
+	// 替换而非追加：恢复的语义是"以这份存档为准"。旧的 append 语义在
+	// 被调用两次时把同一批消息复制两遍（含重复 tool_call_id，直接触发
+	// provider 400），是埋着的脚枪。
+	s.messages = make([]ai.Message, len(msgs))
+	copy(s.messages, msgs)
 	if summary != "" {
 		s.summary = summary
 	}
@@ -190,12 +213,13 @@ type fileRecord struct {
 	Messages    []ai.Message `json:"messages"`
 	Usage       ai.Usage     `json:"usage"`
 	AlwaysAllow []string     `json:"always_allow,omitempty"`
+	Pinned      bool         `json:"pinned,omitempty"`
 }
 
 // SaveToFile 将会话写入磁盘（对话记录）。
 func (s *Session) SaveToFile(path string) error {
 	s.mu.Lock()
-	rec := fileRecord{ID: s.id, Title: s.title, Summary: s.summary, Mode: s.mode, MaxTok: s.maxTok, Usage: s.usage}
+	rec := fileRecord{ID: s.id, Title: s.title, Summary: s.summary, Mode: s.mode, MaxTok: s.maxTok, Usage: s.usage, Pinned: s.pinned}
 	rec.Messages = make([]ai.Message, len(s.messages))
 	copy(rec.Messages, s.messages)
 	for name, allow := range s.alwaysAllow {
@@ -250,6 +274,7 @@ func LoadSessionFile(path string) (*Session, error) {
 	s.mode = rec.Mode
 	s.usage = rec.Usage
 	s.messages = rec.Messages
+	s.pinned = rec.Pinned
 	for _, name := range rec.AlwaysAllow {
 		s.alwaysAllow[name] = true
 	}
@@ -405,35 +430,4 @@ func (s *Session) TrimHead(n int) {
 		return
 	}
 	s.messages = s.messages[n:]
-}
-
-// Dropped returns the messages that would be trimmed by MessagesForLLM.
-// 用于判断是否需要触发上下文压缩。
-func (s *Session) Dropped(system string) int {
-	s.mu.Lock()
-	msgs := make([]ai.Message, len(s.messages))
-	copy(msgs, s.messages)
-	maxTok := s.maxTok
-	s.mu.Unlock()
-
-	if maxTok <= 0 {
-		return 0 // 不裁剪 => 永远不会触发压缩
-	}
-	total := 0
-	if system != "" {
-		total = EstimateTokens(system)
-	}
-	dropped := 0
-	for _, m := range msgs {
-		cost := EstimateTokens(m.Content)
-		for _, tc := range m.ToolCalls {
-			cost += EstimateTokens(tc.Function.Arguments)
-		}
-		if total+cost > maxTok {
-			dropped += cost
-		} else {
-			total += cost
-		}
-	}
-	return dropped
 }

@@ -29,4 +29,5 @@
 
 ## WebSocket 协议
 
-`/ws`；完整消息/事件列表见 `nuxtweb/docs/04-后端-WebSocket协议.md`。
+`/ws`；完整消息/事件列表见 [`websocket-protocol.md`](websocket-protocol.md)。
+前端协议类型定义在 `web/src/api/protocol.ts`，与后端 `internal/websocket/websocket.go` 必须同步修改。

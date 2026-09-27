@@ -49,6 +49,9 @@ type ServeOptions struct {
 	TLSCert     string
 	TLSKey      string
 	ConfigPath  string
+	// CSPUnsafeInline 维持旧版宽松 CSP（script-src 'unsafe-inline'）。
+	// 默认严格：嵌入前端产物的内联脚本按 sha256 白名单放行。
+	CSPUnsafeInline bool
 }
 
 // NewRootCommand 返回根命令：licode 直接运行即启动 Web 服务器。
@@ -56,6 +59,13 @@ func NewRootCommand() *cobra.Command {
 	root := newServeCmd()
 	root.Use = "licode"
 	root.Short = "AI 编程助手（Web 服务器，licode 直接运行即启动）"
+	// cobra 内置 --version。发行版（构建注入 internal/version.Version）下
+	// 直接报告注入值，供 CI 做功能级冒烟；开发构建（未注入）下禁用该标志，
+	// 避免 --version 触发运行时计数器文件的读写。
+	if version.Version != "" {
+		root.Version = version.Version
+		root.SetVersionTemplate("{{.Version}}\n")
+	}
 	return root
 }
 
@@ -116,6 +126,9 @@ func newServeCmd() *cobra.Command {
 			if !cmd.Flags().Changed("tls-key") && cfg.Server.TLSKey != "" {
 				opts.TLSKey = cfg.Server.TLSKey
 			}
+			if !cmd.Flags().Changed("csp-unsafe-inline") && cfg.Server.CSPUnsafeInline {
+				opts.CSPUnsafeInline = true
+			}
 			return runServe(opts)
 		},
 	}
@@ -128,6 +141,7 @@ func newServeCmd() *cobra.Command {
 	f.BoolVar(&opts.HTTPS, "https", false, "启用 HTTPS（未指定证书时自动生成自签名证书）")
 	f.StringVar(&opts.TLSCert, "tls-cert", "", "TLS 证书文件路径（cert.pem）")
 	f.StringVar(&opts.TLSKey, "tls-key", "", "TLS 私钥文件路径（key.pem）")
+	f.BoolVar(&opts.CSPUnsafeInline, "csp-unsafe-inline", false, "维持旧版宽松 CSP（script-src unsafe-inline）；仅当前端产物出现运行时动态注入的内联脚本时才需要")
 	f.StringVarP(&opts.ConfigPath, "config", "c", "", "配置文件路径（默认 ~/.licode/config.toml）")
 	return c
 }
@@ -191,9 +205,15 @@ func runServe(opts *ServeOptions) error {
 		log.SetOutput(io.MultiWriter(os.Stderr, lf))
 	}
 
-	// 版本计数递增（0.0.0.0 → … → 0.0.0.100 → 0.0.1.0）
-	runVersion := version.Bump()
-	log.Printf("licode 版本 %s", runVersion)
+	// 版本：发行版（构建注入 internal/version.Version）直接报告注入值，
+	// 不再每次启动自增计数器——同一发行版反复启动产生不同"版本"会造成
+	// 排障误导，且每次启动写盘没有必要。开发构建才用启动计数器区分
+	// （0.0.0.0 → … → 0.0.0.100 → 0.0.1.0）。
+	if version.Version != "" {
+		log.Printf("licode 版本 %s（发行版）", version.Version)
+	} else {
+		log.Printf("licode 版本 %s（开发构建，启动计数）", version.Bump())
+	}
 
 	// 特性6：工具热加载（fsnotify 监视 ~/.licode/tools/，动态注册/卸载外部命令工具）
 	if toolClose, terr := agent.StartExternalToolWatcher(settings.ToolsDir()); terr == nil {
@@ -325,6 +345,20 @@ func runServe(opts *ServeOptions) error {
 					Type: websocket.EvtSessions, Sessions: cs.sessions.List(), SessionID: cs.sessions.CurrentID(),
 				})
 
+			case websocket.TypeSessionReorder:
+				cs.sessions.Reorder(msg.Order)
+				_ = cs.sessions.SaveAll()
+				c.SendEvent(websocket.ServerEvent{
+					Type: websocket.EvtSessions, Sessions: cs.sessions.List(), SessionID: cs.sessions.CurrentID(),
+				})
+
+			case websocket.TypeSessionPin:
+				cs.sessions.SetPinned(msg.SessionID, msg.Pinned)
+				_ = cs.sessions.SaveAll()
+				c.SendEvent(websocket.ServerEvent{
+					Type: websocket.EvtSessions, Sessions: cs.sessions.List(), SessionID: cs.sessions.CurrentID(),
+				})
+
 			case websocket.TypeAskReply:
 				cs.mu.Lock()
 				ch, ok := cs.pending[msg.AskID]
@@ -441,14 +475,20 @@ func runServe(opts *ServeOptions) error {
 		if !auth.require(w, r) {
 			return
 		}
-		if r.Method == http.MethodGet {
+		switch r.Method {
+		case http.MethodGet:
 			handleFile(w, r, wsState)
-		} else {
+		case http.MethodPost:
 			handleSaveFile(w, r, wsState)
+		default:
+			writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "仅支持 GET/POST"})
 		}
 	})
 	mux.HandleFunc("/api/mkdir", func(w http.ResponseWriter, r *http.Request) {
 		if !auth.require(w, r) {
+			return
+		}
+		if !requirePOST(w, r) {
 			return
 		}
 		handleMkdir(w, r, wsState)
@@ -499,16 +539,25 @@ func runServe(opts *ServeOptions) error {
 		if !auth.require(w, r) {
 			return
 		}
+		if !requirePOST(w, r) {
+			return
+		}
 		handleDeleteFile(w, r, wsState)
 	})
 	mux.HandleFunc("/api/chmod", func(w http.ResponseWriter, r *http.Request) {
 		if !auth.require(w, r) {
 			return
 		}
+		if !requirePOST(w, r) {
+			return
+		}
 		handleChmod(w, r, wsState)
 	})
 	mux.HandleFunc("/api/chown", func(w http.ResponseWriter, r *http.Request) {
 		if !auth.require(w, r) {
+			return
+		}
+		if !requirePOST(w, r) {
 			return
 		}
 		handleChown(w, r, wsState)
@@ -652,24 +701,43 @@ func runServe(opts *ServeOptions) error {
 			"default_username": DefaultUsername,
 		})
 	})
-	mux.Handle("/_nuxt/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Nuxt 静态产物资源（公开）：登录页（SPA）也需要加载，故不要求认证。
-		nuxt := web.NuxtFS()
-		p := strings.TrimPrefix(r.URL.Path, "/")
-		if f, err := nuxt.Open(p); err == nil {
-			f.Close()
-			serveNuxtFile(w, r, nuxt, p)
+	// 注销：清除会话 Cookie。POST-only，跨站中间件对其强制同源。
+	mux.Handle("/logout", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			auth.handleLogout(w, r)
 			return
 		}
-		http.NotFound(w, r)
+		// GET /logout：已登录则清 Cookie 跳回登录页；未登录直接跳。
+		auth.clearSession(w, r.TLS != nil)
+		http.Redirect(w, r, "/login", http.StatusFound)
 	}))
+	// 静态资源前缀。SPA 构建产物在 /assets/ 下；/_nuxt/ 保留为旧路径别名，
+	// 避免浏览器缓存的旧 index.html 引用到已不存在的资源时整站白屏。
+	assetPrefixes := []string{"/assets/", "/_nuxt/"}
+	for _, prefix := range assetPrefixes {
+		mux.Handle(prefix, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// 静态产物资源（公开）：登录页也需要加载，故不要求认证。
+			nuxt := web.StaticFS()
+			p := strings.TrimPrefix(r.URL.Path, "/")
+			// /_nuxt/ 是别名前缀，实际产物没有该目录，映射回 assets/。
+			if strings.HasPrefix(p, "_nuxt/") {
+				p = "assets/" + strings.TrimPrefix(p, "_nuxt/")
+			}
+			if f, err := nuxt.Open(p); err == nil {
+				f.Close()
+				serveNuxtFile(w, r, nuxt, p)
+				return
+			}
+			http.NotFound(w, r)
+		}))
+	}
 	mux.Handle("/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !auth.require(w, r) {
 			return
 		}
-		// Nuxt SPA：先尝试直接命中的静态文件，否则回退 index.html 由前端路由接管（如 /login）。
+		// SPA：先尝试直接命中的静态文件，否则回退 index.html 由前端路由接管（如 /login）。
 		// index.html 禁止浏览器缓存，保证升级/改版后刷新即可看到最新版本。
-		nuxt := web.NuxtFS()
+		nuxt := web.StaticFS()
 		p := strings.TrimPrefix(r.URL.Path, "/")
 		if p == "" {
 			p = "index.html"
@@ -708,7 +776,7 @@ func runServe(opts *ServeOptions) error {
 	useTLS := opts.HTTPS || (opts.TLSCert != "" && opts.TLSKey != "")
 	var handler http.Handler = mux
 	handler = sameOriginGuard(handler)
-	handler = securityHeaders(handler, useTLS)
+	handler = securityHeaders(handler, useTLS, !opts.CSPUnsafeInline)
 
 	srv := &http.Server{
 		Addr:              listenAddr(opts),
@@ -1160,7 +1228,19 @@ func serveNuxtFile(w http.ResponseWriter, r *http.Request, nuxt fs.FS, name stri
 }
 
 // isUnsafeMethod 判断是否为写请求方法（GET/HEAD/OPTIONS 之外）。
+// requirePOST 破坏性写端点的方法门禁：非 POST 一律 405。
+// 这类端点即使靠 JSON body 解析天然拒绝无 body 的 GET，显式 405 也
+// 消除了"浏览器预取/爬虫带 body 的非常规请求"等行为歧义（纵深防御）。
+func requirePOST(w http.ResponseWriter, r *http.Request) bool {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "仅支持 POST"})
+		return false
+	}
+	return true
+}
+
 func isUnsafeMethod(m string) bool {
+
 	switch m {
 	case http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete:
 		return true
@@ -1216,16 +1296,23 @@ func originMatchesHost(origin string, r *http.Request) bool {
 	return strings.EqualFold(ou.Hostname(), h) && op == hp
 }
 
-// securityHeaders 追加基础安全响应头。
-func securityHeaders(next http.Handler, tls bool) http.Handler {
+// securityHeaders 追加基础安全响应头。cspStrict 为 true 时 script-src 使用
+// 嵌入前端产物的内联脚本 sha256 白名单（web.ScriptSrcCSP 启动时计算一次）；
+// false 时维持旧版 'unsafe-inline'（--csp-unsafe-inline 逃生门）。
+func securityHeaders(next http.Handler, tls, cspStrict bool) http.Handler {
+	scriptSrc := "'self' 'unsafe-inline'"
+	if cspStrict {
+		scriptSrc = web.ScriptSrcCSP()
+	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("X-Frame-Options", "DENY")
 		w.Header().Set("Referrer-Policy", "no-referrer")
-		// CSP：禁止对象嵌入与外部脚本，允许内联样式（Nuxt 产物需要）；
-		// connect-src 放开 ws/wss 以支持同源 WebSocket。
+		// CSP：禁止对象嵌入；script 仅同源 + 嵌入产物哈希白名单（严格模式
+		// 下注入型内联脚本无法执行）；内联样式保留（Nuxt 产物需要）；
+		// connect-src 放开 ws/wss 同源 WebSocket 由 same-origin 语义兜底。
 		w.Header().Set("Content-Security-Policy",
-			"default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; "+
+			"default-src 'self'; script-src "+scriptSrc+"; style-src 'self' 'unsafe-inline'; "+
 				"img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' ws: wss:; "+
 				"object-src 'none'; base-uri 'self'; frame-ancestors 'none'")
 		if tls {

@@ -15,6 +15,8 @@ import (
 	"sync"
 	"time"
 
+	"golang.org/x/crypto/argon2"
+
 	"licode/internal/settings"
 	"licode/internal/web"
 )
@@ -47,6 +49,8 @@ const (
 type failEntry struct {
 	count int
 	until time.Time
+	// firstFail 记录窗口起点：未触顶条目的遗忘时限依据。
+	firstFail time.Time
 }
 
 type loginThrottle struct {
@@ -63,8 +67,13 @@ func (t *loginThrottle) allowed(ip string) bool {
 	defer t.mu.Unlock()
 	now := time.Now()
 	for k, e := range t.fails {
-		// 顺带清理过期条目，避免失败过的 IP 永久驻留内存。
+		// 清理所有过了锁定窗口的条目（含从未触顶的低次数失败）：旧实现只清
+		// count>=上限的条目，未触顶的 IP 条目永久驻留，长期公网暴露下无界增长。
+		// 未触顶条目的 until 为零值需要单独兜底，否则计数重置：
+		// 给首次失败补一个窗口期时间戳（见 fail()），过期即视为可遗忘。
 		if now.After(e.until) && e.count >= maxLoginFails {
+			delete(t.fails, k)
+		} else if e.count < maxLoginFails && (e.firstFail.IsZero() || now.Sub(e.firstFail) > lockWindow) {
 			delete(t.fails, k)
 		}
 	}
@@ -72,7 +81,7 @@ func (t *loginThrottle) allowed(ip string) bool {
 	if e == nil {
 		return true
 	}
-	if now.After(e.until) {
+	if e.count >= maxLoginFails && now.After(e.until) {
 		delete(t.fails, ip)
 		return true
 	}
@@ -84,8 +93,10 @@ func (t *loginThrottle) fail(ip string) {
 	defer t.mu.Unlock()
 	e := t.fails[ip]
 	if e == nil {
-		e = &failEntry{}
+		e = &failEntry{firstFail: time.Now()}
 		t.fails[ip] = e
+	} else if e.firstFail.IsZero() {
+		e.firstFail = time.Now()
 	}
 	e.count++
 	if e.count >= maxLoginFails {
@@ -131,12 +142,23 @@ func newAuthState(user, pass string, enabled bool) *authState {
 	return a
 }
 
+// 会话密钥拉伸参数（Argon2id，RFC 9126 基准档）：单次派生 ~19MiB + 一次
+// 迭代，成本参数编译期固定——可变参数意味着攻击者可按参数测算。
+const (
+	kdfTime    = 1
+	kdfMemory  = 19 * 1024 // KiB
+	kdfThreads = 1
+	kdfKeyLen  = 32
+)
+
+// deriveKey 用 Argon2id 从 (secret, user, pass) 拉伸 HMAC 密钥。
+// 旧实现为单轮 SHA-256，cookie 文件一旦泄露可按 ~10⁸/s 离线爆破口令；
+// Argon2id 内存硬化后同硬件成本上升约 5 个数量级。salt 取 secret||user
+// （secret 已持久化且随机）：改密码或改用户名后密钥必然变化，旧会话
+// 令牌自动失效（与旧实现语义一致）。
 func (a *authState) deriveKey() []byte {
-	h := sha256.New()
-	h.Write(a.secret)
-	h.Write([]byte(a.user))
-	h.Write([]byte(a.pass))
-	return h.Sum(nil)
+	salt := append(append([]byte{}, a.secret...), a.user...)
+	return argon2.Key([]byte(a.pass), salt, kdfTime, kdfMemory, kdfThreads, kdfKeyLen)
 }
 
 // checkPassword 常量时间密码比较（比较哈希避免长度差异泄露）。
@@ -207,8 +229,27 @@ func (a *authState) setSession(w http.ResponseWriter, user string, secure bool) 
 	})
 }
 
-func (a *authState) clearSession(w http.ResponseWriter) {
-	http.SetCookie(w, &http.Cookie{Name: SessionCookie, Value: "", Path: "/", HttpOnly: true, MaxAge: -1})
+func (a *authState) clearSession(w http.ResponseWriter, secure bool) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     SessionCookie,
+		Value:    "",
+		Path:     "/",
+		HttpOnly: true,
+		Secure:   secure,
+		SameSite: http.SameSiteLaxMode,
+		MaxAge:   -1,
+	})
+}
+
+// handleLogout 注销当前会话：清 Cookie 并返回 JSON。仅接受 POST
+// （跨站中间件对 POST /api/* 强制同源，避免被第三方页面强制登出）。
+func (a *authState) handleLogout(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "仅支持 POST"})
+		return
+	}
+	a.clearSession(w, r.TLS != nil)
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
 // authed 返回当前请求的登录用户名（未登录返回空）。
@@ -222,6 +263,11 @@ func (a *authState) authed(r *http.Request) string {
 	}
 	u, ok := a.verifyToken(c.Value)
 	if !ok {
+		return ""
+	}
+	// 令牌里的用户名必须与当前配置一致：否则改名后旧令牌仍可用
+	// （改名按设计应吊销全部旧会话，但密钥即使不变也有此兜底才完整）。
+	if u != a.user {
 		return ""
 	}
 	return u
@@ -283,8 +329,13 @@ func (a *authState) handleLogin(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/login?error=1", http.StatusFound)
 		return
 	}
-	// GET：渲染登录页（Nuxt 静态产物 login/index.html，SPA）
-	login, err := web.ReadNuxt("login/index.html")
+	// GET：渲染登录页。
+	// 新前端是 Vite SPA，只产出单入口 index.html（没有 Nuxt 时代的 login/index.html
+	// 预渲染路由），因此优先取预渲染页，缺失时回退 SPA 入口，由前端路由渲染 /login。
+	login, err := web.ReadStatic("login/index.html")
+	if err != nil {
+		login, err = web.ReadStatic("index.html")
+	}
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
 		return

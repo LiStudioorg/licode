@@ -21,3 +21,32 @@ nohup.out
 
 # 误提交的测试二进制
 /licode_test
+
+# 上传/临时工作目录（运行时产物，不入库）
+/uploads/
+
+# Go 测试缓存（沙箱内 GOCACHE 指向仓库内时产生）
+/.gocache/
+/.gotmp/
+
+# 本地工具的缓存与运行数据（SkillHub/Impeccable/npm 缓存、临时 HOME）
+/.dsh/
+/.impeccable/
+/.impeccable-cache/
+/.npmcache/
+/.testhome/
+/licode-test
+
+# 前端（web/：Vite + Vue3 + TS + Pinia + Tailwind）：依赖与本地缓存不入库，
+# 编译结果由 scripts/sync-frontend.sh 同步进 internal/web/dist 后入库。
+/web/node_modules/
+/web/.npm-cache/
+/web/dist/
+/web/.vite/
+
+# 前端冒烟测试的 IIFE 产物（仅本地验证用，不发布）
+/frontend/dist-iife/
+frontend.nuxt-backup/
+
+# 本地开发运行数据（mock 验证用）
+/.devhome/

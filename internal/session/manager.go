@@ -14,9 +14,10 @@ import (
 
 // Info 是会话列表中的一条。
 type Info struct {
-	ID    string `json:"id"`
-	Title string `json:"title"`
-	Count int    `json:"count"`
+	ID     string `json:"id"`
+	Title  string `json:"title"`
+	Count  int    `json:"count"`
+	Pinned bool   `json:"pinned,omitempty"`
 }
 
 // Manager 管理多个会话（对话），支持新建/切换/重命名/删除，并持久化到磁盘。
@@ -309,9 +310,70 @@ func (m *Manager) List() []Info {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	out := make([]Info, 0, len(m.order))
+	// 置顶会话恒定排在最前，其余保持 order 中的相对顺序。
+	// 先输出置顶项，再输出其余，避免前端再做一次排序（两端各排一次容易不一致）。
 	for _, id := range m.order {
-		s := m.sessions[id]
-		out = append(out, Info{ID: id, Title: s.Title(), Count: s.Len()})
+		if s := m.sessions[id]; s != nil && s.Pinned() {
+			out = append(out, Info{ID: id, Title: s.Title(), Count: s.Len(), Pinned: true})
+		}
+	}
+	for _, id := range m.order {
+		if s := m.sessions[id]; s != nil && !s.Pinned() {
+			out = append(out, Info{ID: id, Title: s.Title(), Count: s.Len()})
+		}
 	}
 	return out
+}
+
+// Reorder 按给定顺序重排会话。
+//
+// 规则（与前端拖拽语义一致）：
+//   - ids 中未出现的会话保持其原有相对次序，追加到末尾，避免漏传导致会话「消失」；
+//   - 未知 id 直接忽略，不报错；
+//   - 不改变 current（重排不是切换）。
+func (m *Manager) Reorder(ids []string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if len(ids) == 0 {
+		return
+	}
+	seen := make(map[string]bool, len(ids))
+	next := make([]string, 0, len(m.order))
+	for _, id := range ids {
+		if seen[id] {
+			continue // 重复 id 只取首次，否则会复制出重复条目
+		}
+		if _, ok := m.sessions[id]; !ok {
+			continue
+		}
+		seen[id] = true
+		next = append(next, id)
+	}
+	for _, id := range m.order {
+		if !seen[id] {
+			next = append(next, id)
+		}
+	}
+	m.order = next
+}
+
+// SetPinned 设置会话置顶状态。
+//
+// 落盘在这里做（而不是依赖 Session.onChange）：onChange 会重入 m.mu 造成死锁，
+// 见 Session.SetPinned 的说明。
+func (m *Manager) SetPinned(id string, pinned bool) {
+	m.mu.Lock()
+	s, ok := m.sessions[id]
+	if !ok {
+		m.mu.Unlock()
+		return
+	}
+	s.SetPinned(pinned)
+	dir := m.dir
+	m.mu.Unlock()
+
+	// 锁外落盘：SaveSession 内部会自己取锁
+	if dir != "" {
+		_ = m.SaveSession(id)
+	}
 }

@@ -6,11 +6,11 @@ package websocket
 import (
 	"context"
 	"encoding/json"
-	"runtime/debug"
 	"log"
 	"net"
 	"net/http"
 	"net/url"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"time"
@@ -33,6 +33,8 @@ const (
 	TypeSessionDelete  = "session_delete"  // {session_id}
 	TypeSessionBranch  = "session_branch"  // {session_id, index, content}
 	TypeSessionHistory = "session_history" // {session_id} 请求某会话的完整历史消息
+	TypeSessionReorder = "session_reorder" // {order: [session_id...]} 按给定顺序重排会话
+	TypeSessionPin     = "session_pin"     // {session_id, pinned} 置顶/取消置顶
 )
 
 // Event types (server -> client), mirroring agent.Event.
@@ -51,19 +53,6 @@ const (
 	// EvtHistory 回放某个会话的完整历史消息（存放于 ~/.licode/sessions/*.json）。
 	EvtHistory = "history"
 )
-
-// Broadcast 向所有已连接客户端发送事件。
-func (h *Hub) Broadcast(ev ServerEvent) {
-	h.mu.Lock()
-	clients := make([]*Client, 0, len(h.clients))
-	for c := range h.clients {
-		clients = append(clients, c)
-	}
-	h.mu.Unlock()
-	for _, c := range clients {
-		c.SendEvent(ev)
-	}
-}
 
 // ServerEvent is a JSON event streamed to clients.
 type ServerEvent struct {
@@ -96,6 +85,10 @@ type ClientMessage struct {
 	AskAlways   bool         `json:"askAlways,omitempty"`
 	SessionID   string       `json:"sessionId,omitempty"`
 	Index       int          `json:"index,omitempty"` // {session_branch} 分支点消息序号
+	// Order {session_reorder}：期望的会话 id 顺序（未列出的会话由服务端追加到末尾）。
+	Order []string `json:"order,omitempty"`
+	// Pinned {session_pin}：目标置顶状态。
+	Pinned      bool         `json:"pinned,omitempty"`
 	Attachments []Attachment `json:"attachments,omitempty"`
 }
 

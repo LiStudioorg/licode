@@ -1,0 +1,132 @@
+@import 'tailwindcss';
+
+/*
+ * Licode web 设计令牌（唯一真源）
+ *
+ * 视觉语言：暗色单主题锁 + 发丝边框 + 毛玻璃分层。
+ * 只有一套灰度家族（冷中性，无暖灰混入）、一个强调色。
+ * 圆角系统统一 8px（rounded-lg），不存在第二套圆角规则。
+ */
+@theme {
+  /* 冷中性灰阶，避开纯黑与纯白 */
+  --color-canvas: #0b0c0f;
+  --color-elevated: #121419;
+  --color-sunken: #08090c;
+
+  --color-ink-100: #e8eaef;
+  --color-ink-200: #c8ccd6;
+  --color-ink-300: #9aa0ad;
+  --color-ink-400: #7c828f;
+  --color-ink-500: #626875;
+  --color-ink-600: #4a4f5a;
+  --color-ink-700: #33373f;
+
+  /* 发丝线：一切分隔只用它，不用阴影堆叠 */
+  --color-line: rgba(232, 236, 246, 0.07);
+  --color-line-strong: rgba(232, 236, 246, 0.14);
+
+  /* 唯一强调色，低饱和冷蓝 */
+  --color-accent: #6f9bff;
+  --color-accent-soft: rgba(111, 155, 255, 0.13);
+  --color-accent-line: rgba(111, 155, 255, 0.32);
+
+  --color-warn: #d8a657;
+  --color-danger: #e0736c;
+
+  /* 离线自包含：不加载任何网络字体，全部走系统栈 */
+  --font-sans:
+    ui-sans-serif, system-ui, -apple-system, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB',
+    'Microsoft YaHei', 'Noto Sans SC', sans-serif;
+  --font-mono:
+    ui-monospace, 'SF Mono', 'JetBrains Mono', 'Cascadia Code', Menlo, Consolas, monospace;
+
+  --radius-lg: 8px;
+}
+
+@layer base {
+  :root {
+    color-scheme: dark;
+  }
+
+  html,
+  body,
+  #app {
+    height: 100%;
+  }
+
+  body {
+    margin: 0;
+    background: var(--color-canvas);
+    color: var(--color-ink-100);
+    font-family: var(--font-sans);
+    font-size: 13px;
+    line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+    overscroll-behavior: none;
+  }
+
+  /* 焦点环全局统一，键盘可达性优先于视觉洁癖 */
+  :focus-visible {
+    outline: 1px solid var(--color-accent);
+    outline-offset: 1px;
+  }
+
+  ::selection {
+    background: var(--color-accent-soft);
+  }
+
+  /* 细滚动条，与发丝线语言一致 */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--color-ink-700) transparent;
+  }
+
+  ::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background: var(--color-ink-700);
+    border-radius: 999px;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    background: var(--color-ink-600);
+  }
+
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+}
+
+/*
+ * 毛玻璃面板：分层的唯一手段。
+ * backdrop-filter 在低端机上昂贵，只用在固定壳层上，不用于列表项。
+ */
+@utility glass {
+  background: color-mix(in oklab, var(--color-canvas) 78%, transparent);
+  backdrop-filter: blur(20px) saturate(140%);
+  -webkit-backdrop-filter: blur(20px) saturate(140%);
+}
+
+/* 不支持或主动关闭透明效果时，退回实色，保证可读性 */
+@media (prefers-reduced-transparency: reduce) {
+  .glass {
+    background: var(--color-elevated);
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+}
+
+/* 降低动态效果时，砍掉全部过渡与动画 */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
