@@ -17,11 +17,11 @@ NDK_URL="https://dl.google.com/android/repository/${NDK_DIR}-linux.zip"
 # ─────────────────────────────────────────────────────────
 #  版本注入开关
 #  ENABLE_VERSION_INJECT=1 时，向二进制注入版本号
-#  前提：main 包中必须有 `var version = "dev"` 这样的字符串变量
+#  注入目标：licode/internal/version.Version（字符串变量）
 #  如果你改成其它包，请改 VERSION_SYMBOL 前缀
 # ─────────────────────────────────────────────────────────
 ENABLE_VERSION_INJECT="${ENABLE_VERSION_INJECT:-1}"
-VERSION_SYMBOL="${VERSION_SYMBOL:-main.version}"
+VERSION_SYMBOL="${VERSION_SYMBOL:-licode/internal/version.Version}"
 
 if [ "$ENABLE_VERSION_INJECT" = "1" ]; then
   LDFLAGS_BASE="-s -w -X ${VERSION_SYMBOL}=${VERSION}"

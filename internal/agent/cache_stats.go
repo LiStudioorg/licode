@@ -6,11 +6,11 @@ import "fmt"
 // Cached = 命中 Provider 前缀缓存的输入 token（OpenAI prompt_tokens_details.cached_tokens /
 // Claude cache_read+cache_create / Gemini cachedContentTokenCount）。
 type TokenStats struct {
-	Requests     int     `json:"requests"`
-	InputTokens  int     `json:"inputTokens"`
-	OutputTokens int     `json:"outputTokens"`
-	CachedTokens int     `json:"cachedTokens"`
-	SysHash      string  `json:"sysHash,omitempty"` // 冻结前缀哈希（稳定性可观测）
+	Requests     int    `json:"requests"`
+	InputTokens  int    `json:"inputTokens"`
+	OutputTokens int    `json:"outputTokens"`
+	CachedTokens int    `json:"cachedTokens"`
+	SysHash      string `json:"sysHash,omitempty"` // 冻结前缀哈希（稳定性可观测）
 }
 
 // HitRatio 返回输入 token 中命中缓存的比例（0~1）。

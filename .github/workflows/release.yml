@@ -1,112 +1,79 @@
 name: Release
 
+# 仅版本 tag（v*）触发发布构建；此前 '**' 触发 + go tool dist list 全矩阵
+# （~450 组合、含 ios/js 等无意义目标、continue-on-error 掩盖失败）是误配置。
 on:
   push:
     tags:
-      - '**'
+      - 'v*'
 
 permissions:
   contents: write
 
 jobs:
-  # ── 1. 枚举平台，分流到 Linux / macOS runner ─────────
-  list-targets:
+  # ── 0. 质量门禁：vet/测试不过则不出包 ─────────────────
+  test:
     runs-on: ubuntu-latest
-    outputs:
-      linux_targets: ${{ steps.set.outputs.linux }}
-      mac_targets:   ${{ steps.set.outputs.mac }}
     steps:
+      - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
           go-version: stable
-          cache: false
-      - id: set
-        run: |
-          ALL=$(go tool dist list)
+      - run: go vet ./...
+      - run: go test ./...
 
-          LINUX=$(echo "$ALL" | grep -vE '^ios/' \
-            | awk -F/ '{printf "{\"goos\":\"%s\",\"goarch\":\"%s\"},", $1, $2}')
-          echo "linux=[${LINUX%,}]" >> "$GITHUB_OUTPUT"
-
-          MAC=$(echo "$ALL" | grep -E '^ios/' \
-            | awk -F/ '{printf "{\"goos\":\"%s\",\"goarch\":\"%s\"},", $1, $2}')
-          echo "mac=[${MAC%,}]" >> "$GITHUB_OUTPUT"
-
-  # ── 2a. Linux runner ─────────────────────────────────
-  build-linux:
-    needs: list-targets
+  # ── 1. 构建：与 build.sh / AGENTS.md 一致的 9 个静态平台 ──
+  build:
+    needs: test
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        target: ${{ fromJSON(needs.list-targets.outputs.linux_targets) }}
+        target:
+          - { goos: linux,   goarch: amd64 }
+          - { goos: linux,   goarch: arm64 }
+          - { goos: linux,   goarch: "386" }
+          - { goos: windows, goarch: amd64 }
+          - { goos: windows, goarch: "386" }
+          - { goos: windows, goarch: arm64 }
+          - { goos: darwin,  goarch: amd64 }
+          - { goos: darwin,  goarch: arm64 }
+          - { goos: freebsd, goarch: amd64 }
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-go@v5
         with:
           go-version: stable
-          cache: false
 
-      # ★ 只在 Android 平台启用 NDK 缓存
-      - name: Cache Android NDK
-        if: startsWith(matrix.target.goos, 'android')
-        uses: actions/cache@v4
-        with:
-          path: android-ndk-r26b
-          key: ndk-r26b-${{ runner.os }}
-          restore-keys: |
-            ndk-r26b-
-
-      - name: Build
-        continue-on-error: true
+      - name: Build (static, version injected)
         env:
-          ENABLE_VERSION_INJECT: '1'
+          GOOS: ${{ matrix.target.goos }}
+          GOARCH: ${{ matrix.target.goarch }}
+          CGO_ENABLED: '0'
         run: |
-          chmod +x buildrelease.sh
-          ./buildrelease.sh "${{ matrix.target.goos }}/${{ matrix.target.goarch }}"
+          VERSION="${GITHUB_REF_NAME#v}"
+          ext=""; [ "$GOOS" = "windows" ] && ext=".exe"
+          go build -trimpath -buildvcs=false \
+            -ldflags "-s -w -X licode/internal/version.Version=${VERSION}" \
+            -o "dist/licode-${GOOS}-${GOARCH}${ext}" .
+
+      # 版本注入功能级冒烟：--version 必须精确报告注入的 tag 版本。
+      - name: Smoke version injection (native target only)
+        if: matrix.target.goos == 'linux' && matrix.target.goarch == 'amd64'
+        run: |
+          [ "$(./dist/licode-linux-amd64 --version)" = "${GITHUB_REF_NAME#v}" ] \
+            || { echo "version injection missing or wrong"; exit 1; }
 
       - uses: actions/upload-artifact@v4
         with:
           name: bin-${{ matrix.target.goos }}-${{ matrix.target.goarch }}
           path: dist/
-          if-no-files-found: ignore
+          if-no-files-found: error
 
-  # ── 2b. macOS runner（仅 iOS）─────────────────────────
-  build-macos:
-    needs: list-targets
-    runs-on: macos-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        target: ${{ fromJSON(needs.list-targets.outputs.mac_targets) }}
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-go@v5
-        with:
-          go-version: stable
-          cache: false
-
-      - name: Build
-        continue-on-error: true
-        env:
-          ENABLE_VERSION_INJECT: '1'
-        run: |
-          chmod +x buildrelease.sh
-          ./buildrelease.sh "${{ matrix.target.goos }}/${{ matrix.target.goarch }}"
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: bin-${{ matrix.target.goos }}-${{ matrix.target.goarch }}
-          path: dist/
-          if-no-files-found: ignore
-
-  # ── 3. 汇总发布 ──────────────────────────────────────
+  # ── 2. 汇总发布 ──────────────────────────────────────
   release:
-    needs: [build-linux, build-macos]
+    needs: build
     runs-on: ubuntu-latest
-    if: always()
     steps:
       - uses: actions/download-artifact@v4
         with:
@@ -117,7 +84,9 @@ jobs:
         run: |
           cd artifacts
           sha256sum * > checksums.txt
-          echo "共 $(ls | wc -l) 个文件"
+          # 产物数量必须等于 9 平台 + checksums；缺一即视为构建失败。
+          n=$(ls | wc -l)
+          [ "$n" -eq 10 ] || { echo "expected 10 files, got $n"; exit 1; }
           ls -lh
 
       - uses: softprops/action-gh-release@v2

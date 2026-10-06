@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"licode/internal/dnsclient"
@@ -23,30 +24,33 @@ import (
 // 使用 Google 自己的 RPC 风格请求体（contents / parts / functionCall /
 // functionResponse），与 OpenAI 的 chat/completions 完全不同。
 type GeminiProvider struct {
-	name      string
-	baseURL   string
-	apiKey    string
-	model     string
-	retry     int
+	name       string
+	baseURL    string
+	apiKey     string
+	model      string
+	retry      int
 	dns        *dnsclient.Config
-	client    *http.Client
+	client     *http.Client
+	clientOnce sync.Once
 }
 
 func (p *GeminiProvider) Provider() string { return p.name }
 func (p *GeminiProvider) Model() string    { return p.model }
 
+// httpClient 懒加载共享 http.Client。keepalive、主 Agent、并行子代理会
+// 并发首调，懒加载必须同步（sync.Once），否则并发写 p.client 是数据竞态。
 func (p *GeminiProvider) httpClient() *http.Client {
-	if p.client == nil {
+	p.clientOnce.Do(func() {
 		cfg := Config{DNS: p.dns}
 		p.client = cfg.NewLLMHTTPClient(60 * time.Second)
-	}
+	})
 	return p.client
 }
 
 // ---- wire types -----------------------------------------------------------
 
 type geminiPart struct {
-	Thought bool `json:"thought,omitempty"`
+	Thought          bool            `json:"thought,omitempty"`
 	Text             string          `json:"text,omitempty"`
 	FunctionCall     *geminiFuncCall `json:"functionCall,omitempty"`
 	FunctionResponse *geminiFuncResp `json:"functionResponse,omitempty"`
@@ -92,9 +96,9 @@ type geminiResponse struct {
 		FinishReason string         `json:"finishReason"`
 	} `json:"candidates"`
 	UsageMetadata *struct {
-		PromptTokenCount         int `json:"promptTokenCount"`
-		CandidatesTokenCount     int `json:"candidatesTokenCount"`
-		CachedContentTokenCount  int `json:"cachedContentTokenCount"`
+		PromptTokenCount        int `json:"promptTokenCount"`
+		CandidatesTokenCount    int `json:"candidatesTokenCount"`
+		CachedContentTokenCount int `json:"cachedContentTokenCount"`
 	} `json:"usageMetadata"`
 	Error *struct {
 		Message string `json:"message"`
@@ -181,6 +185,7 @@ func (p *GeminiProvider) buildBody(req ChatRequest) ([]byte, error) {
 			gc.Temperature = &t
 		}
 		if req.MaxTokens > 0 {
+			// 上限钳制统一在 do()/maxTokensFallback 完成。
 			gc.MaxOutputTokens = req.MaxTokens
 		}
 		body.GenerationConfig = gc
@@ -199,40 +204,50 @@ func (p *GeminiProvider) endpoint(model, suffix string) string {
 
 func (p *GeminiProvider) do(ctx context.Context, req ChatRequest, stream bool) (*http.Response, error) {
 	var resp *http.Response
-	err := WithRetry(p.retry, func() error {
-		payload, err := p.buildBody(req)
-		if err != nil {
-			return err
-		}
-		model := req.Model
-		if model == "" {
-			model = p.model
-		}
-		ep := p.endpoint(model, ":generateContent")
-		if stream {
-			ep = p.endpoint(model, ":streamGenerateContent?alt=sse")
-		}
-		httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, ep, bytes.NewReader(payload))
-		if err != nil {
-			return err
-		}
-		httpReq.Header.Set("Content-Type", "application/json")
-		if p.apiKey != "" {
-			httpReq.Header.Set("x-goog-api-key", p.apiKey)
-		}
-		r, err := p.httpClient().Do(httpReq)
-		if err != nil {
-			return fmt.Errorf("gemini request: %w", err)
-		}
-		if r.StatusCode != http.StatusOK {
-			b, _ := io.ReadAll(io.LimitReader(r.Body, 1024))
-			r.Body.Close()
-			return &statusErr{status: "gemini " + r.Status, body: strings.TrimSpace(string(b))}
-		}
-		resp = r
-		return nil
+	err := maxTokensFallback(req.MaxTokens, geminiMaxTokensCap, func(mt int) error {
+		r := req
+		r.MaxTokens = mt
+		return WithRetry(p.retry, func() error {
+			payload, err := p.buildBody(r)
+			if err != nil {
+				return err
+			}
+			model := r.Model
+			if model == "" {
+				model = p.model
+			}
+			ep := p.endpoint(model, ":generateContent")
+			if stream {
+				ep = p.endpoint(model, ":streamGenerateContent?alt=sse")
+			}
+			httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, ep, bytes.NewReader(payload))
+			if err != nil {
+				return err
+			}
+			httpReq.Header.Set("Content-Type", "application/json")
+			if p.apiKey != "" {
+				httpReq.Header.Set("x-goog-api-key", p.apiKey)
+			}
+			r2, err := p.httpClient().Do(httpReq)
+			if err != nil {
+				return fmt.Errorf("gemini request: %w", err)
+			}
+			if r2.StatusCode != http.StatusOK {
+				b, _ := io.ReadAll(io.LimitReader(r2.Body, 1024))
+				r2.Body.Close()
+				return &statusErr{status: "gemini " + r2.Status, body: strings.TrimSpace(string(b))}
+			}
+			resp = r2
+			return nil
+		})
 	})
-	return resp, err
+	if err != nil {
+		if resp != nil {
+			resp.Body.Close()
+		}
+		return nil, err
+	}
+	return resp, nil
 }
 
 // Chat performs a non-streaming completion.

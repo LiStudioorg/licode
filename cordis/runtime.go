@@ -23,7 +23,7 @@ type Runtime struct {
 
 	detached Context
 
-	mapMu sync.RWMutex
+	mapMu  sync.RWMutex
 	fibers map[string]*Fiber
 	order  []string
 }
@@ -177,8 +177,8 @@ func (r *Runtime) Status() []FiberStatus {
 
 // FiberStatus 是插件状态快照。
 type FiberStatus struct {
-	Name  string
-	State FiberState
+	Name   string
+	State  FiberState
 	Inject []string
 }
 

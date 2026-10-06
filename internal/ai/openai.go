@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"licode/internal/dnsclient"
@@ -17,23 +18,26 @@ import (
 // OpenAIProvider implements the OpenAI Chat Completions API (also compatible
 // with any OpenAI-compatible endpoint such as vLLM, LM Studio, OpenRouter).
 type OpenAIProvider struct {
-	name    string
-	baseURL string
-	apiKey  string
-	model   string
-	retry   int
-	dns     *dnsclient.Config
-	client  *http.Client
+	name       string
+	baseURL    string
+	apiKey     string
+	model      string
+	retry      int
+	dns        *dnsclient.Config
+	client     *http.Client
+	clientOnce sync.Once
 }
 
 func (p *OpenAIProvider) Provider() string { return p.name }
 func (p *OpenAIProvider) Model() string    { return p.model }
 
+// httpClient 懒加载共享 http.Client。keepalive、主 Agent、并行子代理会
+// 并发首调，懒加载必须同步（sync.Once），否则并发写 p.client 是数据竞态。
 func (p *OpenAIProvider) httpClient() *http.Client {
-	if p.client == nil {
+	p.clientOnce.Do(func() {
 		cfg := Config{DNS: p.dns}
 		p.client = cfg.NewLLMHTTPClient(60 * time.Second)
-	}
+	})
 	return p.client
 }
 
@@ -83,7 +87,7 @@ type openaiChunk struct {
 	ID      string         `json:"id"`
 	Model   string         `json:"model"`
 	Choices []openaiChoice `json:"choices"`
-	Usage *struct {
+	Usage   *struct {
 		PromptTokens        int `json:"prompt_tokens"`
 		CompletionTokens    int `json:"completion_tokens"`
 		PromptTokensDetails *struct {
@@ -167,6 +171,7 @@ func (p *OpenAIProvider) buildBody(req ChatRequest, stream bool) ([]byte, error)
 	}
 	body := openaiChatReq{Model: req.Model, Messages: msgs, Tools: req.Tools, Stream: stream}
 	if req.MaxTokens > 0 {
+		// 上限钳制统一在 do()/maxTokensFallback 完成。
 		body.MaxTokens = req.MaxTokens
 	}
 	if req.Temperature != 0 {
@@ -178,32 +183,39 @@ func (p *OpenAIProvider) buildBody(req ChatRequest, stream bool) ([]byte, error)
 
 func (p *OpenAIProvider) do(ctx context.Context, req ChatRequest, stream bool) (*http.Response, error) {
 	var resp *http.Response
-	err := WithRetry(p.retry, func() error {
-		payload, err := p.buildBody(req, stream)
-		if err != nil {
-			return err
-		}
-		httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, p.endpoint(), bytes.NewReader(payload))
-		if err != nil {
-			return err
-		}
-		httpReq.Header.Set("Content-Type", "application/json")
-		if p.apiKey != "" {
-			httpReq.Header.Set("Authorization", "Bearer "+p.apiKey)
-		}
-		r, err := p.httpClient().Do(httpReq)
-		if err != nil {
-			return fmt.Errorf("openai request: %w", err)
-		}
-		if r.StatusCode != http.StatusOK {
-			b, _ := io.ReadAll(io.LimitReader(r.Body, 1024))
-			r.Body.Close()
-			return &statusErr{status: r.Status, body: strings.TrimSpace(string(b))}
-		}
-		resp = r
-		return nil
+	err := maxTokensFallback(req.MaxTokens, openAIMaxTokensCap, func(mt int) error {
+		r := req
+		r.MaxTokens = mt
+		return WithRetry(p.retry, func() error {
+			payload, err := p.buildBody(r, stream)
+			if err != nil {
+				return err
+			}
+			httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, p.endpoint(), bytes.NewReader(payload))
+			if err != nil {
+				return err
+			}
+			httpReq.Header.Set("Content-Type", "application/json")
+			if p.apiKey != "" {
+				httpReq.Header.Set("Authorization", "Bearer "+p.apiKey)
+			}
+			r2, err := p.httpClient().Do(httpReq)
+			if err != nil {
+				return fmt.Errorf("openai request: %w", err)
+			}
+			if r2.StatusCode != http.StatusOK {
+				b, _ := io.ReadAll(io.LimitReader(r2.Body, 1024))
+				r2.Body.Close()
+				return &statusErr{status: r2.Status, body: strings.TrimSpace(string(b))}
+			}
+			resp = r2
+			return nil
+		})
 	})
 	if err != nil {
+		if resp != nil {
+			resp.Body.Close()
+		}
 		return nil, err
 	}
 	return resp, nil

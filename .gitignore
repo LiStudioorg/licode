@@ -50,3 +50,9 @@ frontend.nuxt-backup/
 
 # 本地开发运行数据（mock 验证用）
 /.devhome/
+
+# 本地运行数据（LICODE_HOME 指向仓库内时产生；config.json 含 api_key，绝不能入库）
+/.licode-home/
+
+# 仓库根目录的临时报告，不属于源码
+/FIX_REPORT.md

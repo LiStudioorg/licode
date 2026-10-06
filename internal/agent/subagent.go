@@ -16,9 +16,14 @@ import (
 // SubAgentSpec describes a specialized worker agent with its own system
 // prompt and an optional subset of tools.
 type SubAgentSpec struct {
-	Name          string
-	Prompt        string
-	Tools         []string // tool names allowed; empty = all default tools
+	Name   string
+	Prompt string
+	// Tools 为允许的工具名白名单：
+	//   nil（字段缺省）      = 全部默认工具
+	//   []string{}（空非 nil）= 零工具（如 planner 纯文本规划）
+	// 注意 JSON 反序列化中 "tools": [] 得到的是空非 nil 切片（零工具），
+	// 字段缺省才是 nil（全部工具）；语义以 nil/非 nil 区分，勿用 len 判断。
+	Tools         []string
 	Client        ai.LLMClient
 	MaxIterations int
 	MaxTokens     int

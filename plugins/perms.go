@@ -24,7 +24,16 @@ func checkPermission(_ cordis.Context, in any, next func(any) (any, error)) (any
 	if !ok || tc.Ctx == nil {
 		return next(in)
 	}
-	h := agent.GetRunHooks(tc.Ctx)
+	h, injected := agent.LookupRunHooks(tc.Ctx)
+	if !injected {
+		// 未经 Agent.Run 注入钩子直接执行管道工具属于旁路调用：只读工具
+		// 无副作用可放行，副作用工具一律拒绝（旧实现按零值默认 allow，
+		// 等于任何持有 runtime 引用的代码都能绕过 deny/ask/plan 门禁）。
+		if agent.IsReadOnlyTool(tc.Name) {
+			return next(tc)
+		}
+		return shortCircuit(tc, "已拒绝执行 "+tc.Name+"（缺少运行权限上下文，拒绝默认放行）"), nil
+	}
 
 	mode := h.Mode
 	if mode == "" {

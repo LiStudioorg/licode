@@ -1,15 +1,16 @@
 VERSION ?= 0.1.0
 BINARY  ?= licode
-LDFLAGS  = -s -w -X main.version=$(VERSION)
+LDFLAGS  = -s -w -X licode/internal/version.Version=$(VERSION)
 DIST     = build
 UPX      ?= upx
 
 .PHONY: build build-linux build-darwin build-windows cross upx size install clean test
 
-# 与 build.sh 一致的输出目录 build/，先测试再编译
+# 常用 5 平台快速构建（输出目录与 build.sh 一致为 build/，先测试再编译；
+# 完整 9 平台请用 ./build.sh）
 build:
 	go test ./...
-	sh scripts/sync-nuxt.sh
+	sh scripts/sync-frontend.sh
 	CGO_ENABLED=0 GOOS=linux   GOARCH=amd64 go build -ldflags="$(LDFLAGS)" -o $(DIST)/$(BINARY)-linux-amd64 .
 	CGO_ENABLED=0 GOOS=linux   GOARCH=arm64 go build -ldflags="$(LDFLAGS)" -o $(DIST)/$(BINARY)-linux-arm64 .
 	CGO_ENABLED=0 GOOS=darwin  GOARCH=amd64 go build -ldflags="$(LDFLAGS)" -o $(DIST)/$(BINARY)-darwin-amd64 .
@@ -36,7 +37,7 @@ install: build-host
 		install -m 0755 $(DIST)/$(BINARY) $$HOME/.local/bin/$(BINARY); \
 		echo "已安装到 $$HOME/.local/bin/$(BINARY)（/usr/local/bin 需 root）"; \
 	fi
-	@echo "直接运行 $(BINARY) 进入 TUI"
+	@echo "直接运行 $(BINARY) 启动 Web 服务器（浏览器访问 http://127.0.0.1:8080）"
 
 # 可选：UPX 压缩
 upx:

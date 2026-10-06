@@ -35,10 +35,9 @@ func testRuntime(t *testing.T) *cordis.Runtime {
 func execEcho(r *cordis.Runtime, h agent.RunHooks) (string, error) {
 	reg, _ := r.Get(cordis.ServiceTools)
 	tr := reg.(*cordis.ToolRegistry)
-	ctx := context.Background()
-	if h.Ask != nil || len(h.Permissions) > 0 || h.Mode != "" {
-		ctx = agent.WithRunHooks(ctx, h)
-	}
+	// 始终注入钩子（与 Agent.Run 行为一致）：新契约下"未注入"会被
+	// 门禁拒绝，"注入但配置为空"才等价于默认允许。
+	ctx := agent.WithRunHooks(context.Background(), h)
 	return tr.Execute(ctx, "Echo", map[string]any{"a": 1})
 }
 
@@ -138,5 +137,17 @@ func TestBuiltinToolsBridge(t *testing.T) {
 	}
 	if _, ok := reg.Get("Read"); !ok {
 		t.Fatal("Read should remain")
+	}
+}
+
+// TestPermissionBypassWithoutHooks 固化门禁契约：未注入 RunHooks 直接执行
+// 管道工具时，非只读工具必须被拒绝（旧实现按 allow 默认放行，构成旁路）。
+func TestPermissionBypassWithoutHooks(t *testing.T) {
+	r := testRuntime(t)
+	tr, _ := r.Get(cordis.ServiceTools)
+	reg := tr.(*cordis.ToolRegistry)
+	out, _ := reg.Execute(context.Background(), "Echo", map[string]any{"a": 1})
+	if out == "echoed" {
+		t.Fatal("non-readonly tool must be denied without injected hooks")
 	}
 }

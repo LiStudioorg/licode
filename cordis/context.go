@@ -131,9 +131,9 @@ func (dc *detachedContext) Provide(string, any) error { return ErrNoFiber }
 func (dc *detachedContext) Get(name string) (any, bool) {
 	return dc.r.inj.get(name)
 }
-func (dc *detachedContext) Inject([]string, func(Context)) error { return ErrNoFiber }
-func (dc *detachedContext) Effect(func() (func(), error)) error  { return ErrNoFiber }
-func (dc *detachedContext) On(string, Handler) error             { return ErrNoFiber }
+func (dc *detachedContext) Inject([]string, func(Context)) error  { return ErrNoFiber }
+func (dc *detachedContext) Effect(func() (func(), error)) error   { return ErrNoFiber }
+func (dc *detachedContext) On(string, Handler) error              { return ErrNoFiber }
 func (dc *detachedContext) OnPriority(string, int, Handler) error { return ErrNoFiber }
 func (dc *detachedContext) Emit(event string, args ...any) {
 	dc.r.bus.Emit(dc, event, args...)

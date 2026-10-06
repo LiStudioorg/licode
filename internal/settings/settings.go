@@ -245,20 +245,26 @@ func (s *Settings) AIConfig() ai.Config {
 	if ip := strings.TrimSpace(pc.HostIP); ip != "" {
 		cfg.HostIP = ip
 		// 把厂商域名 → 指定 IP 注入 DNS 静态映射（拷贝一份避免改共享配置）。
-		d := dnsclient.Config{Mode: s.DNS.Mode, Servers: s.DNS.Servers, Concurrency: s.DNS.Concurrency, TimeoutMS: s.DNS.TimeoutMS}
-		if s.DNS.HostOverrides != nil {
-			d.HostOverrides = make(map[string]string, len(s.DNS.HostOverrides)+1)
-			for k, v := range s.DNS.HostOverrides {
-				d.HostOverrides[k] = v
+		// s.DNS 可能为 nil（公开 API 直接构造 Settings 时未走 finalize/EnsureDefaults），
+		// 判空兜底，避免把 HostIP 注入路径变成 nil 解引用 panic。
+		if s.DNS == nil {
+			cfg.DNS = &dnsclient.Config{HostOverrides: map[string]string{strings.ToLower(hostOf(pc.BaseURL)): ip}}
+		} else {
+			d := dnsclient.Config{Mode: s.DNS.Mode, Servers: s.DNS.Servers, Concurrency: s.DNS.Concurrency, TimeoutMS: s.DNS.TimeoutMS}
+			if s.DNS.HostOverrides != nil {
+				d.HostOverrides = make(map[string]string, len(s.DNS.HostOverrides)+1)
+				for k, v := range s.DNS.HostOverrides {
+					d.HostOverrides[k] = v
+				}
 			}
-		}
-		if host := hostOf(pc.BaseURL); host != "" {
-			if d.HostOverrides == nil {
-				d.HostOverrides = map[string]string{}
+			if host := hostOf(pc.BaseURL); host != "" {
+				if d.HostOverrides == nil {
+					d.HostOverrides = map[string]string{}
+				}
+				d.HostOverrides[strings.ToLower(host)] = ip
 			}
-			d.HostOverrides[strings.ToLower(host)] = ip
+			cfg.DNS = &d
 		}
-		cfg.DNS = &d
 	} else if s.DNS != nil {
 		cfg.DNS = s.DNS
 	}

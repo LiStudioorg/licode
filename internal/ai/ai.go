@@ -121,6 +121,57 @@ var (
 	_ LLMClient = (*GeminiProvider)(nil)
 )
 
+// 输出 token 上限钳制：配置项 Settings.MaxTokens 的语义是"上下文字符预算"
+// （默认 1e6），并非单次输出上限。原样透传给各家 API 会被严格服务端以 400
+// 拒绝（新装默认配置即不可用），因此各 provider 发送前钳到保守通用值；
+// 个别模型上限更低时由 maxTokensFallback 反应式减半重试兜底。
+const (
+	claudeMaxTokensCap = 32000
+	openAIMaxTokensCap = 16384
+	geminiMaxTokensCap = 8192
+)
+
+// isMaxTokensError 判断是否为"输出上限超限"类请求错误。
+// 覆盖 Anthropic("max_tokens: N > M")、OpenAI("max_tokens is too large")、
+// Gemini("max_output_tokens") 三类文案。
+func isMaxTokensError(err error) bool {
+	if err == nil {
+		return false
+	}
+	s := strings.ToLower(err.Error())
+	if !strings.Contains(s, "400") && !strings.Contains(s, "invalid") {
+		return false
+	}
+	return strings.Contains(s, "max_tokens") ||
+		strings.Contains(s, "maxoutputtokens") ||
+		strings.Contains(s, "max_output_tokens") ||
+		strings.Contains(s, "max output tokens")
+}
+
+// maxTokensFallback 包裹一次请求尝试：先把配置的 maxTokens 钳到 provider 上限
+// （0 表示用 4096 默认值），当服务端仍以"输出上限超限"报错时，把 maxTokens
+// 减半（下限 1024）后重试；仍失败则返回最后一次错误。
+// attempt 负责按传入的 maxTokens 构造并发送请求。
+func maxTokensFallback(reqMax, capN int, attempt func(maxTokens int) error) error {
+	mt := reqMax
+	if mt <= 0 {
+		mt = 4096
+	}
+	if mt > capN {
+		mt = capN
+	}
+	for {
+		err := attempt(mt)
+		if err == nil || !isMaxTokensError(err) || mt <= 1024 {
+			return err
+		}
+		mt /= 2
+		if mt < 1024 {
+			mt = 1024
+		}
+	}
+}
+
 // retryableError reports whether an LLM error is worth retrying with backoff:
 // rate limits (429), transient server errors (503), and network problems.
 func retryableError(err error) bool {

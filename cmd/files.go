@@ -406,14 +406,14 @@ func handleUpload(w http.ResponseWriter, r *http.Request, ws *workspaceState) {
 		return
 	}
 	defer file.Close()
-	
+
 	// 安全校验：限制文件大小（单文件上限 100MB）
 	const maxFileSize = 100 << 20
 	if header.Size > maxFileSize {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "文件过大（最大 100MB）"})
 		return
 	}
-	
+
 	// 安全校验：验证文件类型（基于扩展名和 MIME 类型）
 	ext := strings.ToLower(filepath.Ext(header.Filename))
 	allowedExts := map[string]bool{
@@ -430,7 +430,7 @@ func handleUpload(w http.ResponseWriter, r *http.Request, ws *workspaceState) {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "不支持的文件类型"})
 		return
 	}
-	
+
 	target, err := ws.fsPath(r.FormValue("dir"))
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "目录无效"})

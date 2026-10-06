@@ -23,11 +23,11 @@ type Manifest struct {
 	Name        string          `json:"name"`
 	ID          string          `json:"id"`
 	Version     string          `json:"version"`
-	Entry       string          `json:"entry"`  // 相对插件目录的可执行文件或解释器
-	Args        []string        `json:"args"`   // 传给 entry 的参数（相对路径以插件目录解析）
+	Entry       string          `json:"entry"` // 相对插件目录的可执行文件或解释器
+	Args        []string        `json:"args"`  // 传给 entry 的参数（相对路径以插件目录解析）
 	Description string          `json:"description"`
-	Inject      []string        `json:"inject"`    // 依赖的核心服务名
-	Provide     []string        `json:"provide"`   // 对外提供的服务名（占位注册）
+	Inject      []string        `json:"inject"`  // 依赖的核心服务名
+	Provide     []string        `json:"provide"` // 对外提供的服务名（占位注册）
 	Permissions json.RawMessage `json:"permissions"`
 	AutoStart   *bool           `json:"auto_start"` // 缺省 true
 }

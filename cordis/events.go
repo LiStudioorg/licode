@@ -9,10 +9,10 @@ import (
 
 // handlerEntry 是事件总线中的一个监听器，归属于注册它的 Fiber。
 type handlerEntry struct {
-	id     uint64
-	fiber  *Fiber
-	fn     Handler
-	name   string // 归属插件名（诊断用）
+	id       uint64
+	fiber    *Fiber
+	fn       Handler
+	name     string // 归属插件名（诊断用）
 	priority int
 }
 

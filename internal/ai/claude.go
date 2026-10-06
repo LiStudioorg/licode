@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"licode/internal/dnsclient"
@@ -16,23 +17,26 @@ import (
 
 // ClaudeProvider implements the Anthropic Messages API (streaming SSE).
 type ClaudeProvider struct {
-	name      string
-	baseURL   string
-	apiKey    string
-	model     string
-	retry     int
+	name       string
+	baseURL    string
+	apiKey     string
+	model      string
+	retry      int
 	dns        *dnsclient.Config
-	client    *http.Client
+	client     *http.Client
+	clientOnce sync.Once
 }
 
 func (p *ClaudeProvider) Provider() string { return p.name }
 func (p *ClaudeProvider) Model() string    { return p.model }
 
+// httpClient 懒加载共享 http.Client。keepalive、主 Agent、并行子代理会
+// 并发首调，懒加载必须同步（sync.Once），否则并发写 p.client 是数据竞态。
 func (p *ClaudeProvider) httpClient() *http.Client {
-	if p.client == nil {
+	p.clientOnce.Do(func() {
 		cfg := Config{DNS: p.dns}
 		p.client = cfg.NewLLMHTTPClient(60 * time.Second)
-	}
+	})
 	return p.client
 }
 
@@ -185,6 +189,9 @@ func (p *ClaudeProvider) buildBody(req ChatRequest, stream bool) ([]byte, error)
 	if body.MaxTokens == 0 {
 		body.MaxTokens = 4096
 	}
+	// 配置项 MaxTokens 语义是"上下文字符预算"（默认 1e6），Anthropic 的
+	// max_tokens 是输出上限，原样透传会被 400 拒绝。钳制与超限减半重试
+	// 统一在 do()/maxTokensFallback 完成，这里保持请求体的原值语义。
 	if req.Temperature != 0 {
 		t := normalizeTemperature(req.Model, req.Temperature)
 		body.Temperature = &t
@@ -194,31 +201,41 @@ func (p *ClaudeProvider) buildBody(req ChatRequest, stream bool) ([]byte, error)
 
 func (p *ClaudeProvider) do(ctx context.Context, req ChatRequest, stream bool) (*http.Response, error) {
 	var resp *http.Response
-	err := WithRetry(p.retry, func() error {
-		payload, err := p.buildBody(req, stream)
-		if err != nil {
-			return err
-		}
-		httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, p.baseURL+"/v1/messages", bytes.NewReader(payload))
-		if err != nil {
-			return err
-		}
-		httpReq.Header.Set("Content-Type", "application/json")
-		httpReq.Header.Set("x-api-key", p.apiKey)
-		httpReq.Header.Set("anthropic-version", "2023-06-01")
-		r, err := p.httpClient().Do(httpReq)
-		if err != nil {
-			return fmt.Errorf("claude request: %w", err)
-		}
-		if r.StatusCode != http.StatusOK {
-			b, _ := io.ReadAll(io.LimitReader(r.Body, 1024))
-			r.Body.Close()
-			return &statusErr{status: "claude " + r.Status, body: strings.TrimSpace(string(b))}
-		}
-		resp = r
-		return nil
+	err := maxTokensFallback(req.MaxTokens, claudeMaxTokensCap, func(mt int) error {
+		r := req
+		r.MaxTokens = mt
+		return WithRetry(p.retry, func() error {
+			payload, err := p.buildBody(r, stream)
+			if err != nil {
+				return err
+			}
+			httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, p.baseURL+"/v1/messages", bytes.NewReader(payload))
+			if err != nil {
+				return err
+			}
+			httpReq.Header.Set("Content-Type", "application/json")
+			httpReq.Header.Set("x-api-key", p.apiKey)
+			httpReq.Header.Set("anthropic-version", "2023-06-01")
+			r2, err := p.httpClient().Do(httpReq)
+			if err != nil {
+				return fmt.Errorf("claude request: %w", err)
+			}
+			if r2.StatusCode != http.StatusOK {
+				b, _ := io.ReadAll(io.LimitReader(r2.Body, 1024))
+				r2.Body.Close()
+				return &statusErr{status: "claude " + r2.Status, body: strings.TrimSpace(string(b))}
+			}
+			resp = r2
+			return nil
+		})
 	})
-	return resp, err
+	if err != nil {
+		if resp != nil {
+			resp.Body.Close()
+		}
+		return nil, err
+	}
+	return resp, nil
 }
 
 // Chat performs a non-streaming completion.

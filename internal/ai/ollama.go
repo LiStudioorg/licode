@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"licode/internal/dnsclient"
@@ -16,22 +17,25 @@ import (
 
 // OllamaProvider talks to a local Ollama server (native /api/chat endpoint).
 type OllamaProvider struct {
-	name      string
-	baseURL   string
-	model     string
-	retry     int
+	name       string
+	baseURL    string
+	model      string
+	retry      int
 	dns        *dnsclient.Config
-	client    *http.Client
+	client     *http.Client
+	clientOnce sync.Once
 }
 
 func (p *OllamaProvider) Provider() string { return p.name }
 func (p *OllamaProvider) Model() string    { return p.model }
 
+// httpClient 懒加载共享 http.Client。keepalive、主 Agent、并行子代理会
+// 并发首调，懒加载必须同步（sync.Once），否则并发写 p.client 是数据竞态。
 func (p *OllamaProvider) httpClient() *http.Client {
-	if p.client == nil {
+	p.clientOnce.Do(func() {
 		cfg := Config{DNS: p.dns}
 		p.client = cfg.NewLLMHTTPClient(120 * time.Second)
-	}
+	})
 	return p.client
 }
 

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"strconv"
 
 	"licode/internal/backup"
 )
@@ -32,11 +33,14 @@ func handleImport(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte(`{"ok":false,"error":` + jsonErr(err.Error()) + `}`))
 		return
 	}
-	if err := backup.Import(data, ""); err != nil {
+	rep, err := backup.Import(data, "")
+	if err != nil {
 		w.Write([]byte(`{"ok":false,"error":` + jsonErr(err.Error()) + `}`))
 		return
 	}
-	w.Write([]byte(`{"ok":true}`))
+	// 导入包中的 mcp_servers 会被剥离（防导入即获得任意命令执行），
+	// 把降级数量回传前端展示，用户确认来源可信后可在设置里手动重新添加。
+	w.Write([]byte(`{"ok":true,"mcp_servers_dropped":` + strconv.Itoa(rep.MCPServersDropped) + `}`))
 }
 
 func jsonErr(s string) string {

@@ -4,6 +4,7 @@ package backup
 import (
 	"archive/zip"
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -12,6 +13,7 @@ import (
 
 	"licode/internal/settings"
 )
+
 // Export 把配置、会话、Skills、附加提示词打包成 zip，返回 zip 字节。
 func Export() ([]byte, error) {
 	base := settings.BaseDir()
@@ -94,46 +96,87 @@ func allowedImportPath(rel string) bool {
 }
 
 // Import 从 zip 字节恢复配置/会话/Skills。dest 为目标根目录（默认 ~/.licode）。
-func Import(data []byte, dest string) error {
+// ImportReport 汇总导入过程中的安全降级动作，供 UI 提示用户。
+type ImportReport struct {
+	// MCPServersDropped 是从导入的 config.json 中剥离的 MCP 服务器条目数。
+	// MCP stdio 条目会在下次构建 Agent 时 spawn 任意命令：导入的备份包
+	// 属于外部输入，静默落盘等于"导入即获得开机自启任意命令"的持久化，
+	// 因此默认剥离；用户确认来源可信后可在设置里手动重新添加。
+	MCPServersDropped int `json:"mcp_servers_dropped"`
+}
+
+func sanitizeConfigJSON(data []byte) ([]byte, ImportReport, error) {
+	var rep ImportReport
+	var m map[string]any
+	if err := json.Unmarshal(data, &m); err != nil {
+		// config.json 不合法会在重启后静默回退默认配置，导入必须 fail fast。
+		return nil, rep, fmt.Errorf("config.json 不是合法 JSON: %w", err)
+	}
+	if servers, ok := m["mcp_servers"].([]any); ok && len(servers) > 0 {
+		rep.MCPServersDropped = len(servers)
+		delete(m, "mcp_servers")
+		out, err := json.MarshalIndent(m, "", "  ")
+		if err != nil {
+			return nil, rep, err
+		}
+		return out, rep, nil
+	}
+	return data, rep, nil
+}
+
+func Import(data []byte, dest string) (ImportReport, error) {
+	var rep ImportReport
 	if dest == "" {
 		dest = settings.BaseDir()
 	}
 	zr, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
 	if err != nil {
-		return err
+		return rep, err
 	}
 	for _, f := range zr.File {
 		clean := filepath.Clean(f.Name)
 		if strings.Contains(clean, "..") || filepath.IsAbs(clean) {
-			return fmt.Errorf("非法路径 %q", f.Name)
+			return rep, fmt.Errorf("非法路径 %q", f.Name)
 		}
 		// 兼容旧版备份包：附加提示词目录曾叫 md-prompt/，现统一为 md/。
 		if rel := strings.TrimPrefix(clean, "md-prompt"+string(filepath.Separator)); rel != clean {
 			clean = filepath.Join("md", rel)
 		}
 		if !allowedImportPath(clean) {
-			return fmt.Errorf("不允许导入的路径 %q", f.Name)
+			return rep, fmt.Errorf("不允许导入的路径 %q", f.Name)
 		}
 		target := filepath.Join(dest, clean)
 		rc, err := f.Open()
 		if err != nil {
-			return err
+			return rep, err
+		}
+		content, rerr := io.ReadAll(rc)
+		rc.Close()
+		if rerr != nil {
+			return rep, rerr
+		}
+		if clean == "config.json" {
+			var serr error
+			content, rep, serr = sanitizeConfigJSON(content)
+			if serr != nil {
+				return rep, serr
+			}
 		}
 		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
-			rc.Close()
-			return err
+			return rep, err
 		}
-		out, err := os.Create(target)
-		if err != nil {
-			rc.Close()
-			return err
+		// 配置文件含明文 API Key，落盘权限收紧为仅属主可读写。
+		mode := os.FileMode(0o644)
+		if clean == "config.json" {
+			mode = 0o600
 		}
-		_, werr := io.Copy(out, rc)
-		out.Close()
-		rc.Close()
-		if werr != nil {
-			return werr
+		if err := os.WriteFile(target, content, mode); err != nil {
+			return rep, err
+		}
+		if mode == 0o600 {
+			// WriteFile 对已存在的文件不改权限，这里显式收紧。
+			_ = os.Chmod(target, mode)
 		}
 	}
-	return nil
+	return rep, nil
 }

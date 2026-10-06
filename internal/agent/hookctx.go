@@ -28,10 +28,18 @@ func WithRunHooks(ctx context.Context, h RunHooks) context.Context {
 
 // GetRunHooks 读取运行钩子；未注入时返回零值（全部按默认策略处理）。
 func GetRunHooks(ctx context.Context) RunHooks {
+	h, _ := LookupRunHooks(ctx)
+	return h
+}
+
+// LookupRunHooks 读取运行钩子并报告是否真的注入过。权限监听器用它区分
+// "配置为空（显式允许）"与"根本没注入（旁路调用）"：后者必须默认拒绝，
+// 否则不经 Agent.Run 的调用路径就绕过了整套权限门禁。
+func LookupRunHooks(ctx context.Context) (RunHooks, bool) {
 	if h, ok := ctx.Value(runHooksKey{}).(RunHooks); ok {
-		return h
+		return h, true
 	}
-	return RunHooks{}
+	return RunHooks{}, false
 }
 
 // PermissionFor 按 Permissions 解析某工具的模式：显式项 > "*" 默认 > allow。

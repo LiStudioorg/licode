@@ -12,6 +12,7 @@ import "context"
 // 取而代之，本函数是确定性的 no-op：真正防溢出由三层裁剪管道负责——
 //   - 第 1 层 spill：超长工具结果在采集时即落盘、只留有界预览；
 //   - 第 2 层 尾部截断：session.MessagesForLLM 丢最旧、保最新并清理孤儿 tool 消息。
+//
 // 两者都不引入非确定性、不额外消耗请求，前缀得以字节冻结。
 func (a *Agent) compactIfNeeded(_ context.Context) {
 	// 故意留空：见上方说明。保留方法以兼容 Compaction 开关与既有调用点。

@@ -740,8 +740,10 @@ func (a *Agent) runTool(ctx context.Context, tc ai.ToolCall, onEvent func(Event)
 	}
 	for attempt := 0; ; attempt++ {
 		out, terr = exec()
-		// 迭代式自动重试：仅对“错误或空结果”重试
-		shouldRetry := terr != nil || strings.TrimSpace(out) == ""
+		// 迭代式自动重试：只对"执行出错"重试；"空结果"重试仅对只读工具开放。
+		// 副作用工具（Shell/Write/Edit/Delete/Move/MCP/外部命令等）成功但零输出
+		// 是合法结果（如 mv、touch），按空结果重试会把同一副作用最多执行 max+1 次。
+		shouldRetry := terr != nil || (IsReadOnlyTool(tc.Function.Name) && strings.TrimSpace(out) == "")
 		if !shouldRetry || attempt >= max {
 			break
 		}

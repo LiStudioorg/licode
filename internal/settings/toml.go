@@ -18,6 +18,8 @@ type TOMLConfig struct {
 		HTTPS    bool   `toml:"https"`
 		TLSCert  string `toml:"tls_cert"`
 		TLSKey   string `toml:"tls_key"`
+		// CSPUnsafeInline 维持旧版宽松 CSP；默认严格（内联脚本哈希白名单）。
+		CSPUnsafeInline bool `toml:"csp_unsafe_inline"`
 	} `toml:"server"`
 }
 
