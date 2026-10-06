@@ -1,18 +1,23 @@
 @import 'tailwindcss';
 
 /*
- * Licode web 设计令牌（唯一真源）
+ * Licode 设计令牌（唯一真源）
  *
- * 视觉语言：暗色单主题锁 + 发丝边框 + 毛玻璃分层。
- * 只有一套灰度家族（冷中性，无暖灰混入）、一个强调色。
- * 圆角系统统一 8px（rounded-lg），不存在第二套圆角规则。
+ * 视觉语言：发丝分隔线 + 两级表面差 + 单一强调色。
+ * 分层只靠 surface 明度与 hairline，不用阴影堆叠。
+ *
+ * 双主题机制：暗色是 :root 默认值，.light 类整体覆写同名变量。
+ * Tailwind v4 的工具类引用 var(--color-*)，因此覆写 :root 变量即整站换肤，
+ * 无需重新生成 CSS —— 强调色预设同理（见 themes.ts）。
  */
 @theme {
-  /* 冷中性灰阶，避开纯黑与纯白 */
+  /* 表面：canvas(画布) < elevated(浮层) 两级 + sunken(凹陷/代码底) */
   --color-canvas: #0b0c0f;
-  --color-elevated: #121419;
+  --color-surface: #101218;
+  --color-elevated: #15181f;
   --color-sunken: #08090c;
 
+  /* 文本灰阶：冷中性，避开纯黑纯白 */
   --color-ink-100: #e8eaef;
   --color-ink-200: #c8ccd6;
   --color-ink-300: #9aa0ad;
@@ -21,26 +26,65 @@
   --color-ink-600: #4a4f5a;
   --color-ink-700: #33373f;
 
-  /* 发丝线：一切分隔只用它，不用阴影堆叠 */
+  /* hairline：一切分隔只用这两档 */
   --color-line: rgba(232, 236, 246, 0.07);
   --color-line-strong: rgba(232, 236, 246, 0.14);
 
-  /* 唯一强调色，低饱和冷蓝 */
+  /* 三栏分隔：比 hairline 明显，保证竖框可见 */
+  --color-shell-edge: rgba(232, 236, 246, 0.13);
+
+  /* 强调色（可被预设覆写）：低饱和冷蓝 */
   --color-accent: #6f9bff;
+  --color-accent-ink: #0b0c0f;
   --color-accent-soft: rgba(111, 155, 255, 0.13);
   --color-accent-line: rgba(111, 155, 255, 0.32);
 
+  /* 语义色 */
   --color-warn: #d8a657;
+  --color-warn-soft: rgba(216, 166, 87, 0.12);
   --color-danger: #e0736c;
+  --color-danger-soft: rgba(224, 115, 108, 0.12);
+  --color-ok: #6fcf97;
+  --color-ok-soft: rgba(111, 207, 151, 0.12);
 
-  /* 离线自包含：不加载任何网络字体，全部走系统栈 */
+  /* 用户气泡（可覆写） */
+  --color-bubble: rgba(255, 255, 255, 0.06);
+
+  /* 离线自包含：零网络字体，全部系统栈 */
   --font-sans:
     ui-sans-serif, system-ui, -apple-system, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB',
     'Microsoft YaHei', 'Noto Sans SC', sans-serif;
   --font-mono:
     ui-monospace, 'SF Mono', 'JetBrains Mono', 'Cascadia Code', Menlo, Consolas, monospace;
 
-  --radius-lg: 8px;
+  --radius-card: 10px;
+
+  /* 统一缓动：Material 标准曲线，全站唯一 */
+  --ease-std: cubic-bezier(0.2, 0, 0, 1);
+}
+
+/* 浅色主题：只覆写表面/文本/hairline/气泡，强调色沿用预设 */
+:root.light {
+  --color-canvas: #f7f8fa;
+  --color-surface: #ffffff;
+  --color-elevated: #ffffff;
+  --color-sunken: #eef0f4;
+
+  --color-ink-100: #16181d;
+  --color-ink-200: #3a3f49;
+  --color-ink-300: #5a6070;
+  --color-ink-400: #787f8d;
+  --color-ink-500: #98a0ac;
+  --color-ink-600: #c3c8d1;
+  --color-ink-700: #dde1e8;
+
+  --color-line: rgba(20, 24, 34, 0.09);
+  --color-line-strong: rgba(20, 24, 34, 0.16);
+  --color-shell-edge: rgba(20, 24, 34, 0.15);
+
+  --color-bubble: rgba(20, 24, 34, 0.05);
+  --color-accent-ink: #ffffff;
+  color-scheme: light;
 }
 
 @layer base {
@@ -66,7 +110,7 @@
     overscroll-behavior: none;
   }
 
-  /* 焦点环全局统一，键盘可达性优先于视觉洁癖 */
+  /* 焦点环全局统一，键盘可达性优先 */
   :focus-visible {
     outline: 1px solid var(--color-accent);
     outline-offset: 1px;
@@ -76,7 +120,7 @@
     background: var(--color-accent-soft);
   }
 
-  /* 细滚动条，与发丝线语言一致 */
+  /* 细滚动条，与 hairline 语言一致 */
   * {
     scrollbar-width: thin;
     scrollbar-color: var(--color-ink-700) transparent;
@@ -86,41 +130,34 @@
     width: 8px;
     height: 8px;
   }
-
   ::-webkit-scrollbar-thumb {
     background: var(--color-ink-700);
     border-radius: 999px;
   }
-
   ::-webkit-scrollbar-thumb:hover {
     background: var(--color-ink-600);
   }
-
   ::-webkit-scrollbar-track {
     background: transparent;
   }
 }
 
-/*
- * 毛玻璃面板：分层的唯一手段。
- * backdrop-filter 在低端机上昂贵，只用在固定壳层上，不用于列表项。
- */
+/* 毛玻璃：仅用于固定壳层（顶栏/侧栏），列表项禁用（低端机昂贵） */
 @utility glass {
   background: color-mix(in oklab, var(--color-canvas) 78%, transparent);
   backdrop-filter: blur(20px) saturate(140%);
   -webkit-backdrop-filter: blur(20px) saturate(140%);
 }
 
-/* 不支持或主动关闭透明效果时，退回实色，保证可读性 */
+/* 无障碍偏好：关透明则退实色，关动效则砍全部过渡动画 */
 @media (prefers-reduced-transparency: reduce) {
   .glass {
-    background: var(--color-elevated);
+    background: var(--color-surface);
     backdrop-filter: none;
     -webkit-backdrop-filter: none;
   }
 }
 
-/* 降低动态效果时，砍掉全部过渡与动画 */
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
@@ -129,4 +166,122 @@
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
   }
+}
+
+/*
+ * Markdown 渲染样式：挂在 .md 容器下，作用域明确，
+ * 不污染组件层（组件用 Tailwind 工具类，这里只管富文本）。
+ */
+.md-p {
+  margin: 0 0 8px;
+}
+.md-p:last-child {
+  margin-bottom: 0;
+}
+.md-h {
+  margin: 14px 0 6px;
+  font-weight: 600;
+  line-height: 1.3;
+  color: var(--color-ink-100);
+}
+:first-child.md-h {
+  margin-top: 0;
+}
+.md-h2 {
+  font-size: 15px;
+}
+.md-h3 {
+  font-size: 14px;
+}
+.md-h4,
+.md-h5 {
+  font-size: 13px;
+}
+.md-link {
+  color: var(--color-accent);
+  text-decoration: none;
+  word-break: break-all;
+}
+.md-link:hover {
+  text-decoration: underline;
+}
+.md-code {
+  padding: 1px 5px;
+  border-radius: 5px;
+  background: color-mix(in oklab, var(--color-ink-100) 8%, transparent);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--color-ink-100);
+}
+.md-quote {
+  margin: 6px 0;
+  padding: 2px 0 2px 10px;
+  border-left: 2px solid var(--color-line-strong);
+  color: var(--color-ink-300);
+}
+.md-list {
+  margin: 4px 0 8px;
+  padding-left: 20px;
+}
+.md-list li {
+  margin: 2px 0;
+}
+.md-hr {
+  margin: 12px 0;
+  border: 0;
+  border-top: 1px solid var(--color-line);
+}
+.md-pre {
+  margin: 8px 0;
+  border: 1px solid var(--color-line);
+  border-radius: var(--radius-card);
+  background: var(--color-sunken);
+  overflow: hidden;
+}
+.md-pre-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 10px;
+  border-bottom: 1px solid var(--color-line);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--color-ink-500);
+}
+.md-pre pre {
+  margin: 0;
+  padding: 10px;
+  overflow-x: auto;
+}
+.md-pre code {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--color-ink-200);
+  background: none;
+}
+.md-copy {
+  padding: 1px 8px;
+  border: 1px solid var(--color-line);
+  border-radius: 6px;
+  color: var(--color-ink-300);
+  font-size: 11px;
+  cursor: pointer;
+  transition:
+    border-color 150ms var(--ease-std),
+    background 150ms var(--ease-std);
+}
+.md-copy:hover {
+  border-color: var(--color-line-strong);
+  background: color-mix(in oklab, var(--color-ink-100) 6%, transparent);
+}
+
+/* 视图切换的基础过渡（配合 <Transition>） */
+.fade-enter-active,
+.fade-leave-active {
+  transition: opacity 140ms var(--ease-std);
+}
+.fade-enter-from,
+.fade-leave-to {
+  opacity: 0;
 }

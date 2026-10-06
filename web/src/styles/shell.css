@@ -1,0 +1,473 @@
+/* 外壳布局：CSS Grid + 媒体查询。抽屉用 transform，避免 JS 反复改布局导致抖动。
+   断点：1280 / 1024 / 768，另加 高度<500 的手机横屏。 */
+
+.shell {
+  display: grid;
+  grid-template-columns: 264px minmax(0, 1fr) 300px;
+  height: 100dvh;
+  overflow: hidden;
+}
+
+.shell__nav,
+.shell__tree {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+/* 侧栏用实色 surface，不再用 glass：半透明背景与主区同色会让竖分隔线看不见 */
+.shell__nav {
+  border-right: 1px solid var(--color-shell-edge);
+  background: var(--color-surface);
+}
+.shell__tree {
+  border-left: 1px solid var(--color-shell-edge);
+  background: var(--color-surface);
+}
+
+.shell__main {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  background: var(--color-canvas);
+}
+
+/* 顶部 40px 上下文条：标题 + 工作目录 + 运行状态 */
+.shell__topbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 40px;
+  flex-shrink: 0;
+  padding: 0 10px;
+  border-bottom: 1px solid var(--color-shell-edge);
+  background: var(--color-surface);
+}
+.shell__title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--color-ink-100);
+}
+.shell__badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+  padding: 2px 7px;
+  border: 1px solid var(--color-line);
+  border-radius: 6px;
+  font-size: 11px;
+  color: var(--color-accent);
+}
+
+/* 中间：消息流（滚动）+ 底部固定输入区 */
+.shell__content {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.shell__icon-btn {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  flex-shrink: 0;
+  border-radius: 8px;
+  color: var(--color-ink-300);
+  transition: background 120ms var(--ease-std);
+}
+.shell__icon-btn:hover {
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--color-ink-100);
+}
+
+.shell__brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 48px;
+  flex-shrink: 0;
+  padding: 0 10px;
+  border-bottom: 1px solid var(--color-shell-edge);
+}
+.shell__logo {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  flex-shrink: 0;
+  border-radius: 7px;
+  background: var(--color-accent);
+  color: var(--color-accent-ink);
+  font-family: var(--font-mono, monospace);
+  font-size: 11px;
+  line-height: 1;
+}
+.shell__name {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--color-ink-100);
+}
+
+.shell__nav-body {
+  flex: 1;
+  min-height: 0;
+  padding: 12px;
+}
+.shell__nav-label {
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--color-ink-600);
+}
+.shell__nav-back {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+  padding: 8px 10px;
+  border: 1px solid var(--color-line);
+  border-radius: 8px;
+  color: var(--color-ink-300);
+  transition: all 120ms var(--ease-std);
+}
+.shell__nav-back:hover {
+  border-color: var(--color-line-strong);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--color-ink-100);
+}
+
+.shell__nav-links {
+  flex-shrink: 0;
+  padding: 8px;
+  border-top: 1px solid var(--color-shell-edge);
+}
+.shell__nav-link {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  color: var(--color-ink-400);
+  transition: background 120ms var(--ease-std);
+}
+.shell__nav-link:hover {
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--color-ink-200);
+}
+.shell__nav-link.is-active {
+  background: rgba(255, 255, 255, 0.07);
+  color: var(--color-ink-100);
+}
+
+.shell__nav-foot {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+  padding: 8px;
+  border-top: 1px solid var(--color-shell-edge);
+}
+.shell__conn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 0 6px;
+  font-size: 11px;
+}
+.shell__conn-dot {
+  width: 6px;
+  height: 6px;
+  flex-shrink: 0;
+  border-radius: 999px;
+}
+.shell__conn-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--color-ink-400);
+}
+
+.shell__tree-head {
+  display: flex;
+  align-items: center;
+  height: 40px;
+  flex-shrink: 0;
+  padding: 0 10px;
+  border-bottom: 1px solid var(--color-shell-edge);
+}
+.shell__tree-title {
+  flex: 1;
+  color: var(--color-ink-300);
+}
+
+.shell__scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 30;
+  background: rgba(0, 0, 0, 0.55);
+}
+
+/* 抽屉在窄屏用 fixed + transform 滑出。必须同时约束宽度与高度，
+   不能只写 width: 100% —— 那样会撑出横向溢出，把主区挤成空白。 */
+.shell__nav,
+.shell__tree {
+  /* 默认（宽屏）不参与定位 */
+}
+
+/* 折叠/呼出按钮：宽屏才需要，窄屏由媒体查询打开 */
+.shell__nav-toggle {
+  display: none;
+}
+.shell__tree-toggle {
+  display: none;
+}
+
+/* ---------- ≥1280px：三栏常驻 ---------- */
+@media (min-width: 1280px) {
+  .shell__nav-close {
+    display: none;
+  }
+  .shell__tree-head {
+    display: none;
+  }
+  .shell__tree-toggle {
+    display: grid;
+  }
+  .shell__nav-toggle {
+    display: grid;
+  }
+  .shell--tree-collapsed {
+    grid-template-columns: 264px minmax(0, 1fr) 0;
+  }
+  .shell--nav-collapsed {
+    grid-template-columns: 0 minmax(0, 1fr) 300px;
+  }
+  .shell--tree-collapsed .shell__tree,
+  .shell--nav-collapsed .shell__nav {
+    display: none;
+  }
+}
+
+/* ---------- 1024–1280：左常驻 240，右栏浮层 ---------- */
+@media (min-width: 1024px) and (max-width: 1279.98px) {
+  .shell {
+    grid-template-columns: 240px minmax(0, 1fr);
+  }
+  .shell__nav-close {
+    display: none;
+  }
+  .shell__tree-toggle {
+    display: grid;
+  }
+  .shell__tree {
+    position: fixed;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 45;
+    width: 300px;
+    transform: translateX(100%);
+    transition: transform 200ms ease-out;
+    visibility: hidden;
+    pointer-events: none;
+  }
+  .shell--tree-open .shell__tree {
+    transform: translateX(0);
+    visibility: visible;
+    pointer-events: auto;
+  }
+  .shell__tree-head {
+    display: flex;
+  }
+}
+
+/* ---------- 768–1024：左抽屉，右抽屉 ---------- */
+@media (min-width: 768px) and (max-width: 1023.98px) {
+  .shell {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  /* 抽屉收起时必须 visibility:hidden —— 只靠 transform 元素仍占位，
+     会被 getBoundingClientRect 量到、也会接收点击（踩过）。 */
+  .shell__nav {
+    position: fixed;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    z-index: 45;
+    width: min(280px, 84vw);
+    transform: translateX(-100%);
+    transition: transform 200ms ease-out;
+    visibility: hidden;
+    pointer-events: none;
+  }
+  .shell--nav-open .shell__nav {
+    transform: translateX(0);
+    visibility: visible;
+    pointer-events: auto;
+    box-shadow: 0 0 40px rgba(0, 0, 0, 0.45);
+  }
+  .shell__nav-toggle,
+  .shell__tree-toggle {
+    display: grid;
+  }
+  .shell__tree {
+    position: fixed;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 45;
+    width: min(320px, 88vw);
+    transform: translateX(100%);
+    transition: transform 200ms ease-out;
+    visibility: hidden;
+    pointer-events: none;
+  }
+  .shell--tree-open .shell__tree {
+    transform: translateX(0);
+    visibility: visible;
+    pointer-events: auto;
+  }
+  .shell__nav-close,
+  .shell__tree-head {
+    display: flex;
+  }
+}
+
+/* ---------- <768px：单列。左抽屉 + 主区占满，不显示文件树 ---------- */
+@media (max-width: 767.98px) {
+  .shell {
+    /* 单列：只留主区，左右都以 fixed 抽屉形式浮在上面 */
+    grid-template-columns: minmax(0, 1fr);
+    /* 手机上不要让地址栏收起时抖动：dvh 已是动态视口高度 */
+    height: 100dvh;
+  }
+
+  /* --- 左侧栏：默认完全不可见，点 ☰ 滑出 --- */
+  .shell__nav {
+    position: fixed;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    z-index: 45;
+    width: min(280px, 84vw);
+    max-width: 84vw;
+    transform: translateX(-100%);
+    transition: transform 200ms ease-out;
+    /* 收起时不接收点击、不参与 tab 序列，避免隐形层挡住主区 */
+    visibility: hidden;
+    pointer-events: none;
+  }
+  .shell--nav-open .shell__nav {
+    transform: translateX(0);
+    visibility: visible;
+    pointer-events: auto;
+    box-shadow: 0 0 40px rgba(0, 0, 0, 0.45);
+  }
+  /* 手机上侧栏内部可滚动（会话多时） */
+  .shell__nav > * {
+    min-height: 0;
+  }
+
+  /* --- 右侧文件树：手机上整体不显示 --- */
+  .shell__tree {
+    display: none;
+  }
+  .shell__tree-toggle {
+    display: none;
+  }
+
+  /* --- 左上角只留 ☰ --- */
+  .shell__nav-toggle {
+    display: grid;
+  }
+  .shell__nav-close {
+    display: grid;
+  }
+
+  /* 触控目标 >= 44px */
+  .shell__icon-btn {
+    width: 44px;
+    height: 44px;
+  }
+  .shell__nav-link {
+    padding: 12px;
+  }
+  .shell__topbar {
+    height: 48px;
+    padding-left: 4px;
+  }
+}
+
+/* ---------- 矮屏（手机横屏）：高度 <500 一律按单列抽屉处理 ----------
+   宽度判断在这里不够用：844×390 的横屏手机宽度 844 > 768，
+   会落进平板断点而显示侧栏与文件树，实际可用高度只有 390。 */
+@media (max-height: 500px) and (max-width: 1023.98px) {
+  .shell {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .shell__topbar {
+    height: 40px;
+  }
+  .shell__nav {
+    position: fixed;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    z-index: 45;
+    width: min(280px, 84vw);
+    transform: translateX(-100%);
+    transition: transform 200ms ease-out;
+    visibility: hidden;
+    pointer-events: none;
+    overflow-y: auto;
+  }
+  .shell--nav-open .shell__nav {
+    transform: translateX(0);
+    visibility: visible;
+    pointer-events: auto;
+  }
+  .shell__nav-toggle {
+    display: grid;
+  }
+  .shell__tree,
+  .shell__tree-toggle {
+    display: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .shell__nav,
+  .shell__tree {
+    transition: none;
+  }
+}
+
+/* ---------- 底部输入区 + 状态栏：手机上钉在视口底部 ----------
+   桌面端它们本来就在 flex 列末尾，不需要 fixed。手机上若只靠 flex，
+   一旦中间的滚动区算错高度，输入框就会被挤出屏幕（实测会完全看不到）。
+   这里显式固定，配合 visualViewport 处理软键盘。 */
+/* ---------- 底部输入区 + 状态栏 ----------
+   手机上不再用 fixed 定位输入区。原因：fixed + bottom:calc(var(--x))
+   一旦变量没写上就静默失效，元素会消失得毫无痕迹（踩过一次）。
+   改为让 .shell 用 100dvh 撑满视口，flex 列自然把输入区压在底部；
+   软键盘弹出时 dvh 自动收缩。少一层依赖就少一个失效点。
+   只有状态栏在键盘弹出时靠 --kb-offset 抬升，输入区跟着它上移。 */
+@media (max-width: 767.98px) {
+  .shell__statusbar {
+    /* 键盘弹出时抬到键盘上方；无键盘时 --kb-offset 为 0 */
+    transform: translateY(calc(-1 * var(--kb-offset, 0px)));
+    /* iPhone home indicator 不遮住状态栏 */
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+}

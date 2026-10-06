@@ -2,8 +2,29 @@
 <html lang="zh-CN">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
-    <title>Licode</title>
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content"
+    />
+    <meta name="color-scheme" content="dark light" />
+    <meta name="theme-color" content="#0b0c0f" />
+    <meta name="description" content="licode · 单二进制 Web Agent" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <title>licode</title>
+    <script>
+      // 首帧防闪白：在样式解析前把主题类贴到 html 上。
+      // 必须是内联同步脚本——放进打包产物就晚于首次绘制了。
+      // localStorage key 必须与 composables/useTheme.ts 的 LS_KEY 保持一致。
+      try {
+        var t = JSON.parse(localStorage.getItem('licod...e-v1') || '{}')
+        if (t && t.mode === 'light') document.documentElement.classList.add('light')
+        if (t && typeof t.accent === 'string' && t.accent) {
+          document.documentElement.style.setProperty('--color-accent', t.accent)
+        }
+      } catch (e) {
+        /* 隐私模式或脏数据：忽略，用默认深色 */
+      }
+    </script>
   </head>
   <body>
     <div id="app"></div>

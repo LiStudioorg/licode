@@ -1,122 +1,124 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, nextTick, ref } from 'vue'
 import { useSessionStore } from '@/stores/session'
-import type { SessionInfo } from '@/api/protocol'
+import AppIcon from '@/components/ui/AppIcon.vue'
+import BaseConfirm from '@/components/ui/BaseConfirm.vue'
 
 /**
- * 左栏会话列表：分组展示 + 拖拽重排 + 右键菜单。
+ * 会话列表：搜索 + 置顶/普通/空会话分组 + 拖拽重排 + 右键菜单 + 运行指示。
  *
- * 拖拽约束：置顶会话不参与拖拽（服务端恒定把它们排在前面），
- * 因此这里只在同组内允许拖放，跨组拖放会被忽略。
+ * 拖拽约束：置顶项由服务端恒定排在最前，不参与拖拽区间；跨区落点被忽略，
+ * 避免产生一个立刻被服务端纠正的假顺序。顺序走本地乐观更新 + session_reorder。
  *
- * 拖拽用原生 HTML5 DnD 而非第三方库：需求只有「同组上下重排」，
- * 引入拖拽库的收益不抵它的体积与样式对抗成本。
+ * 键盘可达：列表项可聚焦，Alt+↑/↓ 等价于拖拽上下移一格。
  */
 const session = useSessionStore()
-
-const draggingId = ref<string | null>(null)
-const dropTarget = ref<{ id: string; position: 'before' | 'after' } | null>(null)
 
 interface MenuState {
   open: boolean
   x: number
   y: number
-  target: SessionInfo | null
+  id: string
+  title: string
   renaming: boolean
   draft: string
 }
 
-const menu = ref<MenuState>({
-  open: false,
-  x: 0,
-  y: 0,
-  target: null,
-  renaming: false,
-  draft: '',
-})
-
+const menu = ref<MenuState>({ open: false, x: 0, y: 0, id: '', title: '', renaming: false, draft: '' })
 const renameInput = ref<HTMLInputElement | null>(null)
 
-function openMenu(e: MouseEvent, target: SessionInfo) {
+function openMenu(e: MouseEvent, id: string, title: string) {
   e.preventDefault()
-  menu.value = {
-    open: true,
-    // 用视口坐标，配合 fixed 定位，避免被列容器的 overflow 裁掉
-    x: e.clientX,
-    y: e.clientY,
-    target,
-    renaming: false,
-    draft: target.title,
-  }
+  e.stopPropagation()
+  menu.value = { open: true, x: e.clientX, y: e.clientY, id, title, renaming: false, draft: title }
 }
 
 function closeMenu() {
   if (menu.value.open) menu.value = { ...menu.value, open: false, renaming: false }
 }
 
-async function beginRename() {
-  if (!menu.value.target) return
+function beginRename() {
   menu.value.renaming = true
-  await Promise.resolve()
-  renameInput.value?.focus()
-  renameInput.value?.select()
+  void nextTick(() => {
+    renameInput.value?.focus()
+    renameInput.value?.select()
+  })
 }
 
 function commitRename() {
-  const target = menu.value.target
-  if (target) {
-    const title = menu.value.draft.trim()
-    if (title && title !== target.title) session.rename(target.id, title)
-  }
+  const { id, title, draft } = menu.value
+  const next = draft.trim()
+  if (next && next !== title) session.rename(id, next)
+  closeMenu()
+}
+
+const target = computed(() => session.sessions.find((s) => s.id === menu.value.id) ?? null)
+
+function togglePin() {
+  if (target.value) session.setPinned(target.value.id, !target.value.pinned)
   closeMenu()
 }
 
 function copyId() {
-  const target = menu.value.target
-  if (target) void navigator.clipboard?.writeText(target.id)
+  void navigator.clipboard?.writeText(menu.value.id)
   closeMenu()
 }
 
-function togglePin() {
-  const target = menu.value.target
-  if (target) session.setPinned(target.id, !target.pinned)
+function doBranch() {
+  if (menu.value.id) session.branch(menu.value.id)
   closeMenu()
 }
 
-function removeSession() {
-  const target = menu.value.target
-  if (target) session.remove(target.id)
+function doExport() {
+  if (target.value) session.exportSession(target.value.id, target.value.title)
   closeMenu()
+}
+
+const pendingDelete = ref(false)
+
+function askDelete() {
+  closeMenu()
+  pendingDelete.value = true
+}
+
+function confirmDelete() {
+  // 删除要带当前 id：菜单已关闭，target 计算属性会失效
+  const id = menu.value.id
+  pendingDelete.value = false
+  if (id) session.remove(id)
 }
 
 /* ---------------- 拖拽 ---------------- */
 
-function onDragStart(e: DragEvent, item: SessionInfo) {
-  if (item.pinned) {
+const draggingId = ref<string | null>(null)
+const dropTarget = ref<{ id: string; position: 'before' | 'after' } | null>(null)
+
+function onDragStart(e: DragEvent, id: string, pinned?: boolean) {
+  if (pinned) {
     e.preventDefault()
     return
   }
-  draggingId.value = item.id
-  e.dataTransfer?.setData('text/plain', item.id)
+  draggingId.value = id
+  e.dataTransfer?.setData('text/plain', id)
   if (e.dataTransfer) e.dataTransfer.effectAllowed = 'move'
 }
 
-function onDragOver(e: DragEvent, item: SessionInfo) {
-  if (!draggingId.value || draggingId.value === item.id) return
-  const dragged = session.sessions.find((s) => s.id === draggingId.value)
-  // 跨组（置顶与否）不允许落点，避免产生一个被服务端立刻纠正的假顺序
-  if (!dragged || !!dragged.pinned !== !!item.pinned) return
+function onDragOver(e: DragEvent, id: string, pinned?: boolean) {
+  const dragged = draggingId.value
+  if (!dragged || dragged === id) return
+  const draggedItem = session.sessions.find((s) => s.id === dragged)
+  // 跨区（置顶/普通）不允许落点：服务端会立刻纠正，本地先拒
+  if (!draggedItem || !!draggedItem.pinned !== !!pinned) return
   e.preventDefault()
   const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
-  const position = e.clientY < rect.top + rect.height / 2 ? 'before' : 'after'
-  dropTarget.value = { id: item.id, position }
+  dropTarget.value = { id, position: e.clientY < rect.top + rect.height / 2 ? 'before' : 'after' }
 }
 
-function onDrop(e: DragEvent, item: SessionInfo) {
+function onDrop(e: DragEvent, id: string) {
   e.preventDefault()
-  const draggedId = draggingId.value
+  const dragged = draggingId.value
   const position = dropTarget.value?.position ?? 'before'
-  if (draggedId && draggedId !== item.id) session.reorder(draggedId, item.id, position)
+  if (dragged && dragged !== id) session.reorder(dragged, id, position)
   onDragEnd()
 }
 
@@ -125,69 +127,63 @@ function onDragEnd() {
   dropTarget.value = null
 }
 
-/** 键盘可达的排序：Alt+上下方向键等价于拖拽前后移动一格 */
-function moveByKeyboard(item: SessionInfo, delta: -1 | 1) {
-  const list = session.sessions.filter((s) => !!s.pinned === !!item.pinned)
-  const idx = list.findIndex((s) => s.id === item.id)
-  const next = list[idx + delta]
+function moveByKeyboard(id: string, delta: -1 | 1) {
+  const item = session.sessions.find((s) => s.id === id)
+  if (!item) return
+  const peers = session.sessions.filter((s) => !!s.pinned === !!item.pinned)
+  const idx = peers.findIndex((s) => s.id === id)
+  const next = peers[idx + delta]
   if (!next) return
-  session.reorder(item.id, next.id, delta === -1 ? 'before' : 'after')
+  session.reorder(id, next.id, delta === -1 ? 'before' : 'after')
 }
 
-function onEsc(e: KeyboardEvent) {
-  if (e.key === 'Escape') closeMenu()
-}
+const searchActive = computed(() => session.query.trim().length > 0)
+const noMatch = computed(
+  () => searchActive.value && session.grouped.every((g) => g.items.length === 0),
+)
 
 onMounted(() => {
   window.addEventListener('click', closeMenu)
-  window.addEventListener('keydown', onEsc)
   window.addEventListener('resize', closeMenu)
+  window.addEventListener('scroll', closeMenu, true)
 })
 onBeforeUnmount(() => {
   window.removeEventListener('click', closeMenu)
-  window.removeEventListener('keydown', onEsc)
   window.removeEventListener('resize', closeMenu)
+  window.removeEventListener('scroll', closeMenu, true)
 })
 
-/** 菜单靠近视口边缘时向内收，避免被裁切 */
 const menuStyle = computed(() => {
-  const width = 168
-  const height = menu.value.renaming ? 96 : 168
-  const x = Math.min(menu.value.x, window.innerWidth - width - 8)
-  const y = Math.min(menu.value.y, window.innerHeight - height - 8)
-  return { left: `${Math.max(8, x)}px`, top: `${Math.max(8, y)}px`, width: `${width}px` }
+  const w = 176
+  const h = menu.value.renaming ? 84 : 196
+  const x = Math.max(8, Math.min(menu.value.x, window.innerWidth - w - 8))
+  const y = Math.max(8, Math.min(menu.value.y, window.innerHeight - h - 8))
+  return { left: `${x}px`, top: `${y}px`, width: `${w}px` }
 })
 </script>
 
 <template>
   <div class="border-b border-line p-2">
-    <label class="sr-only" for="session-search">搜索会话</label>
     <div class="relative">
-      <svg
-        viewBox="0 0 16 16"
-        class="pointer-events-none absolute left-2 top-1/2 size-3.5 -translate-y-1/2 text-ink-500"
-        fill="none"
-        stroke="currentColor"
-        stroke-width="1.25"
-        aria-hidden="true"
-      >
-        <circle cx="7" cy="7" r="4.25" />
-        <path d="M10.2 10.2L13.5 13.5" stroke-linecap="round" />
-      </svg>
+      <AppIcon
+        name="search"
+        class="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-ink-500"
+      />
+      <label class="sr-only" for="session-search">搜索会话</label>
       <input
         id="session-search"
         v-model="session.query"
         type="search"
-        class="h-8 w-full rounded-lg border border-line bg-white/[0.02] pl-7 pr-2 text-ink-100 transition-colors placeholder:text-ink-500 hover:border-line-strong focus:border-accent-line focus:outline-none"
-        placeholder="搜索"
+        class="h-8 w-full rounded-lg border border-line bg-white/[0.02] pl-8 pr-2 text-ink-100 outline-none transition-colors placeholder:text-ink-500 hover:border-line-strong focus:border-accent-line"
+        placeholder="搜索会话"
       />
     </div>
   </div>
 
   <nav class="min-h-0 flex-1 overflow-y-auto px-2 py-2" aria-label="会话列表">
-    <div v-for="group in session.grouped" :key="group.group" class="mb-3 last:mb-0">
-      <p class="px-2 pb-1 text-[11px] text-ink-500">{{ group.group }}</p>
-      <ul>
+    <div v-for="group in session.grouped" :key="group.key" class="mb-3 last:mb-0">
+      <p class="px-2 pb-1 text-[11px] text-ink-500">{{ group.label }}</p>
+      <ul class="space-y-px">
         <li v-for="item in group.items" :key="item.id">
           <button
             type="button"
@@ -195,7 +191,7 @@ const menuStyle = computed(() => {
             class="group relative flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left transition-colors"
             :class="[
               item.id === session.activeId
-                ? 'bg-white/[0.05] text-ink-100'
+                ? 'bg-white/[0.06] text-ink-100'
                 : 'text-ink-300 hover:bg-white/[0.03] hover:text-ink-100',
               draggingId === item.id ? 'opacity-40' : '',
               dropTarget?.id === item.id
@@ -205,109 +201,117 @@ const menuStyle = computed(() => {
                 : '',
             ]"
             :aria-current="item.id === session.activeId ? 'true' : undefined"
-            @click="session.select(item.id)"
-            @contextmenu="openMenu($event, item)"
-            @dragstart="onDragStart($event, item)"
-            @dragover="onDragOver($event, item)"
-            @drop="onDrop($event, item)"
+            @click="session.switchSession(item.id)"
+            @contextmenu="openMenu($event, item.id, item.title)"
+            @dragstart="onDragStart($event, item.id, item.pinned)"
+            @dragover="onDragOver($event, item.id, item.pinned)"
+            @drop="onDrop($event, item.id)"
             @dragend="onDragEnd"
-            @keydown.alt.up.prevent="moveByKeyboard(item, -1)"
-            @keydown.alt.down.prevent="moveByKeyboard(item, 1)"
+            @keydown.alt.up.prevent="moveByKeyboard(item.id, -1)"
+            @keydown.alt.down.prevent="moveByKeyboard(item.id, 1)"
           >
-            <!-- 置顶标识：真实语义状态，非装饰 -->
-            <svg
-              v-if="item.pinned"
-              viewBox="0 0 16 16"
-              class="size-3 shrink-0 text-accent"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="1.4"
-              aria-label="已置顶"
-            >
-              <path d="M6 2h4l-.5 4 2 2.5H4.5l2-2.5L6 2zM8 8.5V14" stroke-linecap="round" stroke-linejoin="round" />
-            </svg>
+            <!-- 激活标记：一条强调色竖线，比整块高亮克制 -->
+            <span
+              v-if="item.id === session.activeId"
+              class="absolute -left-2 top-1/2 h-4 w-[2px] -translate-y-1/2 rounded-full bg-accent"
+              aria-hidden="true"
+            />
+            <AppIcon v-if="item.pinned" name="pin" class="size-3 text-accent" />
             <span class="min-w-0 flex-1 truncate">{{ item.title }}</span>
-            <span v-if="item.count" class="shrink-0 font-mono text-[10px] text-ink-500">{{
-              item.count
-            }}</span>
+            <!-- 该会话正在生成：转圈比数字更准确地传达「在跑」 -->
+            <AppIcon
+              v-if="session.isRunning(item.id)"
+              name="spinner"
+              class="size-3 animate-spin text-accent motion-reduce:animate-none"
+            />
+            <span v-else-if="item.count" class="shrink-0 font-mono text-[10px] text-ink-600">{{ item.count }}</span>
           </button>
         </li>
       </ul>
     </div>
 
-    <p v-if="session.grouped.length === 0" class="px-2 py-6 text-center text-ink-500">
+    <p v-if="noMatch" class="px-2 py-8 text-center text-ink-500">没有匹配的会话</p>
+    <p v-else-if="session.grouped.length === 0" class="px-2 py-8 text-center text-ink-500">
       {{ session.connection === 'open' ? '还没有会话' : '正在连接…' }}
     </p>
   </nav>
 
-  <div class="border-t border-line p-2">
+  <div class="space-y-1 border-t border-line p-2">
     <button
       type="button"
-      class="flex w-full items-center gap-2 rounded-lg border border-line bg-white/[0.02] px-2 py-1.5 text-ink-200 transition-colors hover:border-line-strong hover:bg-white/[0.04] active:scale-[0.99]"
-      @click="session.create()"
+      class="flex w-full items-center gap-2 rounded-lg border border-line bg-white/[0.02] px-2 py-1.5 text-ink-200 transition-colors hover:border-line-strong hover:bg-white/[0.05] active:scale-[0.99]"
+      @click="session.newSession()"
     >
-      <svg viewBox="0 0 16 16" class="size-3.5" fill="none" stroke="currentColor" stroke-width="1.25" aria-hidden="true">
-        <path d="M8 3.5v9M3.5 8h9" stroke-linecap="round" />
-      </svg>
+      <AppIcon name="plus" class="size-3.5" />
       新建会话
+      <span class="ml-auto font-mono text-[10px] text-ink-600">N</span>
+    </button>
+    <button
+      type="button"
+      class="flex w-full items-center gap-2 rounded-lg px-2 py-1 text-ink-400 transition-colors hover:bg-white/[0.03] hover:text-ink-200"
+      @click="session.refreshSessions()"
+    >
+      <AppIcon name="refresh" class="size-3" />
+      刷新列表
     </button>
   </div>
 
-  <!-- 右键菜单 -->
-  <div
-    v-if="menu.open"
-    class="fixed z-50 rounded-lg border border-line-strong bg-elevated p-1"
-    :style="menuStyle"
-    role="menu"
-    @click.stop
-  >
-    <template v-if="!menu.renaming">
-      <button
-        type="button"
-        role="menuitem"
-        class="flex w-full items-center rounded-lg px-2 py-1 text-left text-ink-200 transition-colors hover:bg-white/[0.06]"
-        @click="beginRename"
-      >
-        重命名
-      </button>
-      <button
-        type="button"
-        role="menuitem"
-        class="flex w-full items-center rounded-lg px-2 py-1 text-left text-ink-200 transition-colors hover:bg-white/[0.06]"
-        @click="togglePin"
-      >
-        {{ menu.target?.pinned ? '取消置顶' : '置顶' }}
-      </button>
-      <button
-        type="button"
-        role="menuitem"
-        class="flex w-full items-center rounded-lg px-2 py-1 text-left text-ink-200 transition-colors hover:bg-white/[0.06]"
-        @click="copyId"
-      >
-        复制会话 ID
-      </button>
-      <div class="my-1 h-px bg-line" />
-      <button
-        type="button"
-        role="menuitem"
-        class="flex w-full items-center rounded-lg px-2 py-1 text-left text-danger transition-colors hover:bg-white/[0.06]"
-        @click="removeSession"
-      >
-        删除会话
-      </button>
-    </template>
-
-    <div v-else class="p-1">
-      <label class="sr-only" for="rename-input">会话名称</label>
-      <input
-        id="rename-input"
-        ref="renameInput"
-        v-model="menu.draft"
-        class="h-7 w-full rounded-lg border border-line bg-white/[0.02] px-2 text-ink-100 focus:border-accent-line focus:outline-none"
-        @keydown.enter.prevent="commitRename"
-        @keydown.esc.prevent="closeMenu"
-      />
-      <p class="mt-1 text-[11px] text-ink-500">Enter 保存 / Esc 取消</p>
+  <!-- 右键菜单：Teleport 出去避免被列容器 overflow 裁切 -->
+  <Teleport to="body">
+    <div
+      v-if="menu.open"
+      class="fixed z-50 rounded-[10px] border border-line-strong bg-elevated p-1"
+      :style="menuStyle"
+      role="menu"
+      @click.stop
+    >
+      <template v-if="!menu.renaming">
+        <button type="button" role="menuitem" class="menu-item" @click="beginRename">重命名</button>
+        <button type="button" role="menuitem" class="menu-item" @click="togglePin">
+          {{ target?.pinned ? '取消置顶' : '置顶' }}
+        </button>
+        <button type="button" role="menuitem" class="menu-item" @click="doBranch">从此分支</button>
+        <button type="button" role="menuitem" class="menu-item" @click="doExport">导出 Markdown</button>
+        <button type="button" role="menuitem" class="menu-item" @click="copyId">复制会话 ID</button>
+        <div class="my-1 h-px bg-line" />
+        <button type="button" role="menuitem" class="menu-item !text-danger" @click="askDelete">删除会话</button>
+      </template>
+      <div v-else class="p-1">
+        <label class="sr-only" for="rename-input">会话名称</label>
+        <input
+          id="rename-input"
+          ref="renameInput"
+          v-model="menu.draft"
+          class="h-7 w-full rounded-lg border border-line bg-white/[0.02] px-2 text-ink-100 outline-none focus:border-accent-line"
+          @keydown.enter.prevent="commitRename"
+          @keydown.esc.prevent="closeMenu"
+        />
+        <p class="mt-1 text-[11px] text-ink-500">Enter 保存 / Esc 取消</p>
+      </div>
     </div>
-  </div>
+  </Teleport>
+
+  <BaseConfirm
+    v-model:open="pendingDelete"
+    title="删除这个会话？"
+    :message="`「${target?.title ?? ''}」将移入回收目录 sessions/.trash。`"
+    confirm-text="删除"
+    danger
+    @confirm="confirmDelete"
+  />
 </template>
+
+<style scoped>
+.menu-item {
+  display: block;
+  width: 100%;
+  padding: 5px 8px;
+  border-radius: 6px;
+  text-align: left;
+  color: var(--color-ink-200);
+  transition: background 120ms var(--ease-std);
+}
+.menu-item:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+</style>

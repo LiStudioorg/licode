@@ -1,153 +1,253 @@
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { useUiStore } from '@/stores/ui'
+import { useSessionStore } from '@/stores/session'
+import { useTheme } from '@/composables/useTheme'
+import AppIcon from '@/components/ui/AppIcon.vue'
+import SessionList from '@/components/SessionList.vue'
+import FileTree from '@/components/FileTree.vue'
+import type { IconName } from '@/utils/icons'
 
 /**
- * 三栏外壳。
+ * 外壳：左 264 + 中自适应 + 右 300（文件树）。**无顶栏**。
  *
- * 布局契约（每个断点的塌陷方式都是显式声明，不依赖“Tailwind 会处理”）：
- *   >= xl (1280px)：左栏 264px 常驻 + 中栏自适应 + 右栏 320px 常驻
- *   >= md (768px)：左栏常驻 + 中栏自适应，右栏收进抽屉
- *   <  md：单栏，左栏与右栏都是覆盖式抽屉
+ * 断点与 styles/shell.css 的媒体查询一一对应：
+ *   ≥1280px    三栏常驻，左右均可折叠
+ *   1024–1280  左常驻 240，右栏浮层
+ *   768–1024   左抽屉，右栏浮层
+ *   <768       单列，左右皆抽屉（触控目标 ≥44px）
+ *   高度<500   手机横屏，按单列处理
  *
- * 视觉契约：所有分隔只用品红发丝线（--color-line），
- * 分层只靠 glass 与 sunken 两级背景差，不用阴影堆叠。
+ * 主内容经默认插槽传入；本组件不渲染 RouterView，避免嵌套两层导致路由深度错位。
  */
 const ui = useUiStore()
+const session = useSessionStore()
+// 解构后模板里才能自动解包（嵌套在对象里的 ref 不会自动 unwrap）
+const { isDark, toggleMode } = useTheme()
+const route = useRoute()
+const router = useRouter()
+
+const isChat = computed(() => route.name === 'chat')
+
+const NAV: { name: string; label: string; icon: IconName; to: string }[] = [
+  { name: 'chat', label: '对话', icon: 'chat', to: '/' },
+  { name: 'files', label: '文件', icon: 'files', to: '/files' },
+  { name: 'settings', label: '设置', icon: 'settings', to: '/settings' },
+]
+
+const currentLabel = computed(() => NAV.find((n) => n.name === route.name)?.label ?? '')
+
+const connLabel = computed(() => {
+  switch (session.connection) {
+    case 'open':
+      return '连接成功'
+    case 'reconnecting':
+      return '重连中'
+    case 'closed':
+      return '已断开'
+    default:
+      return '连接中'
+  }
+})
+
+const connTone = computed(() => {
+  if (session.connection === 'open') return 'bg-ok'
+  if (session.connection === 'closed') return 'bg-danger'
+  return 'bg-warn'
+})
 
 function onKeydown(e: KeyboardEvent) {
   if (e.key === 'Escape') ui.closeAll()
 }
 
-// 抽屉打开时锁滚动，避免背景跟着滚
+/* ---------------- 软键盘 / 移动端底栏高度 ----------------
+ * iOS 软键盘不触发 window.resize，只能靠 visualViewport。做法：
+ *   键盘高度 = 布局视口高 - 可视视口高 - 可视视口顶部偏移
+ * 把它写进 --kb-offset，底部固定的状态栏据此抬升，输入区自然跟着上移。
+ */
+const kbOffset = ref(0)
+
+function syncViewport() {
+  const vv = window.visualViewport
+  if (!vv) {
+    kbOffset.value = 0
+  } else {
+    const hidden = window.innerHeight - vv.height - vv.offsetTop
+    // 阈值 80px：排除地址栏伸缩造成的小幅变化，只有真正的键盘才算
+    kbOffset.value = hidden > 80 ? Math.round(hidden) : 0
+  }
+  /*
+   * 只写 --kb-offset 一个变量。输入区不再依赖 --statusbar-h / --bottom-h：
+   * 那两个值必须先量 DOM 才有，而量的时候元素可能尚未挂载 ——
+   * 变量缺失会让 calc() 静默失效，输入框凭空消失且毫无报错。
+   * 现在底部布局完全由 flex + dvh 决定，JS 只负责补键盘高度。
+   */
+  document.documentElement.style.setProperty('--kb-offset', `${kbOffset.value}px`)
+}
+
+// 切页自动收起抽屉，否则遮罩会挡住新页面
 watch(
-  () => ui.navOpen || ui.inspectorOpen,
+  () => route.fullPath,
+  () => ui.closeAll(),
+)
+
+watch(
+  () => ui.navOpen || ui.treeOpen,
   (open) => {
     document.body.style.overflow = open ? 'hidden' : ''
   },
 )
 
-onMounted(() => window.addEventListener('keydown', onKeydown))
+onMounted(() => {
+  window.addEventListener('keydown', onKeydown)
+  syncViewport()
+  window.visualViewport?.addEventListener('resize', syncViewport)
+  window.visualViewport?.addEventListener('scroll', syncViewport)
+  window.addEventListener('orientationchange', syncViewport)
+})
+
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', onKeydown)
+  window.visualViewport?.removeEventListener('resize', syncViewport)
+  window.visualViewport?.removeEventListener('scroll', syncViewport)
+  window.removeEventListener('orientationchange', syncViewport)
   document.body.style.overflow = ''
 })
 </script>
 
 <template>
-  <div class="flex h-dvh flex-col overflow-hidden bg-canvas text-ink-100">
-    <!-- 顶栏：唯一常驻的毛玻璃层，承担品牌与全局动作 -->
-    <header
-      class="glass relative z-30 flex h-12 shrink-0 items-center gap-2 border-b border-line px-3"
-    >
-      <button
-        type="button"
-        class="-ml-1 grid size-8 place-items-center rounded-lg text-ink-300 transition-colors hover:bg-white/[0.04] hover:text-ink-100 active:scale-[0.96] md:hidden"
-        aria-label="打开会话列表"
-        :aria-expanded="ui.navOpen"
-        @click="ui.toggleNav()"
-      >
-        <svg viewBox="0 0 16 16" class="size-4" fill="none" stroke="currentColor" stroke-width="1.25">
-          <path d="M2 4.5h12M2 8h12M2 11.5h8" stroke-linecap="round" />
-        </svg>
-      </button>
-
-      <div class="flex min-w-0 items-center gap-2">
-        <span
-          class="grid size-5 shrink-0 place-items-center rounded-[6px] border border-accent-line bg-accent-soft font-mono text-[10px] leading-none text-accent"
-          aria-hidden="true"
-          >L</span
-        >
-        <span class="truncate text-ink-100">Licode</span>
-      </div>
-
-      <div class="ml-auto flex items-center gap-1">
+  <div
+    class="shell"
+    :class="{
+      'shell--nav-open': ui.navOpen,
+      'shell--tree-open': ui.treeOpen,
+      'shell--nav-collapsed': ui.navCollapsed,
+      'shell--tree-collapsed': ui.treeCollapsed,
+    }"
+  >
+    <!-- ============ 左侧栏（所有页面常驻） ============ -->
+    <aside class="shell__nav" aria-label="侧边栏">
+      <div class="shell__brand">
+        <span class="shell__logo" aria-hidden="true">L</span>
+        <span class="shell__name">licode</span>
         <button
           type="button"
-          class="grid size-8 place-items-center rounded-lg text-ink-300 transition-colors hover:bg-white/[0.04] hover:text-ink-100 active:scale-[0.96] xl:hidden"
-          aria-label="打开详情面板"
-          :aria-expanded="ui.inspectorOpen"
-          @click="ui.toggleInspector()"
+          class="shell__icon-btn shell__nav-close"
+          aria-label="收起侧边栏"
+          @click="ui.closeAll()"
         >
-          <svg viewBox="0 0 16 16" class="size-4" fill="none" stroke="currentColor" stroke-width="1.25">
-            <rect x="2" y="3" width="12" height="10" rx="2" />
-            <path d="M10 3v10" />
-          </svg>
+          <AppIcon name="chevronLeft" class="size-4" />
         </button>
+      </div>
+
+      <!-- chat 页：会话列表；其它页：栏目名 + 返回对话 -->
+      <SessionList v-if="isChat" />
+
+      <div v-else class="shell__nav-body">
+        <span class="shell__nav-label">{{ currentLabel }}</span>
+        <button type="button" class="shell__nav-back" @click="router.push('/')">
+          <AppIcon name="chat" class="size-4" />
+          返回对话
+        </button>
+      </div>
+
+      <!-- 导航贴底常驻 -->
+      <nav class="shell__nav-links" aria-label="主导航">
+        <RouterLink
+          v-for="n in NAV"
+          :key="n.name"
+          :to="n.to"
+          class="shell__nav-link"
+          :class="{ 'is-active': route.name === n.name }"
+          :aria-current="route.name === n.name ? 'page' : undefined"
+        >
+          <AppIcon :name="n.icon" class="size-4 shrink-0" />
+          <span>{{ n.label }}</span>
+        </RouterLink>
+      </nav>
+
+      <!-- 底部：连接状态 + 主题 -->
+      <div class="shell__nav-foot">
+        <span class="shell__conn" role="status">
+          <span class="shell__conn-dot" :class="connTone" />
+          <span class="shell__conn-text">{{ connLabel }}</span>
+        </span>
+        <RouterLink
+          to="/diagnostics"
+          class="shell__icon-btn ml-auto"
+          aria-label="诊断"
+          title="诊断"
+        >
+          <AppIcon name="info" class="size-4" />
+        </RouterLink>
+        <button
+          type="button"
+          class="shell__icon-btn"
+          :aria-label="isDark ? '切换到浅色主题' : '切换到深色主题'"
+          :title="isDark ? '浅色主题' : '深色主题'"
+          @click="toggleMode()"
+        >
+          <AppIcon :name="isDark ? 'sun' : 'moon'" class="size-4" />
+        </button>
+      </div>
+    </aside>
+
+    <!-- ============ 中栏 ============ -->
+    <main class="shell__main">
+      <!-- 40px 上下文条：标题 + 运行状态 + 两侧开关 -->
+      <div class="shell__topbar">
+        <button
+          type="button"
+          class="shell__icon-btn shell__nav-toggle"
+          aria-label="打开侧边栏"
+          :aria-expanded="ui.navOpen"
+          @click="ui.toggleNav()"
+        >
+          <AppIcon name="menu" class="size-4" />
+        </button>
+
+        <h1 class="shell__title">
+          {{ isChat ? (session.active?.title ?? '未选择会话') : currentLabel }}
+        </h1>
+
+        <span v-if="session.runningCount > 0" class="shell__badge" :title="`${session.runningCount} 个会话正在生成`">
+          <AppIcon name="spinner" class="size-3 animate-spin motion-reduce:animate-none" />
+          {{ session.runningCount }} 个后台任务
+        </span>
 
         <button
           type="button"
-          class="grid size-8 place-items-center rounded-lg text-ink-300 transition-colors hover:bg-white/[0.04] hover:text-ink-100 active:scale-[0.96]"
-          aria-label="设置"
+          class="shell__icon-btn shell__tree-toggle"
+          aria-label="文件树"
+          :aria-expanded="ui.treeOpen"
+          @click="ui.toggleTree()"
         >
-          <svg viewBox="0 0 16 16" class="size-4" fill="none" stroke="currentColor" stroke-width="1.25">
-            <circle cx="8" cy="8" r="2.25" />
-            <path
-              d="M8 1.75v1.6M8 12.65v1.6M14.25 8h-1.6M3.35 8h-1.6M12.4 3.6l-1.13 1.13M4.73 11.27L3.6 12.4M12.4 12.4l-1.13-1.13M4.73 4.73L3.6 3.6"
-              stroke-linecap="round"
-            />
-          </svg>
+          <AppIcon name="files" class="size-4" />
         </button>
       </div>
-    </header>
 
-    <div class="flex min-h-0 flex-1">
-      <!-- 左栏：>= md 常驻；< md 覆盖式抽屉 -->
-      <aside
-        class="glass fixed inset-y-0 left-0 z-40 flex w-[264px] shrink-0 flex-col border-r border-line transition-transform duration-200 ease-out md:static md:z-auto md:translate-x-0"
-        :class="ui.navOpen ? 'translate-x-0' : '-translate-x-full'"
-        aria-label="会话列表"
-      >
-        <div class="flex items-center justify-between border-b border-line px-3 py-2 md:hidden">
-          <span class="text-ink-300">会话</span>
-          <button
-            type="button"
-            class="grid size-7 place-items-center rounded-lg text-ink-400 transition-colors hover:bg-white/[0.04] hover:text-ink-100"
-            aria-label="关闭会话列表"
-            @click="ui.closeAll()"
-          >
-            <svg viewBox="0 0 16 16" class="size-4" fill="none" stroke="currentColor" stroke-width="1.25">
-              <path d="M4 4l8 8M12 4l-8 8" stroke-linecap="round" />
-            </svg>
-          </button>
-        </div>
-        <slot name="nav" />
-      </aside>
+      <div class="shell__content">
+        <slot />
+      </div>
+    </main>
 
-      <!-- 中栏：唯一的自适应列 -->
-      <main class="relative flex min-h-0 min-w-0 flex-1 flex-col bg-canvas">
-        <slot name="main" />
-      </main>
+    <!-- ============ 右侧文件树 ============ -->
+    <aside class="shell__tree" aria-label="文件树">
+      <div class="shell__tree-head">
+        <span class="shell__tree-title">文件</span>
+        <button type="button" class="shell__icon-btn" aria-label="收起文件树" @click="ui.closeAll()">
+          <AppIcon name="close" class="size-4" />
+        </button>
+      </div>
+      <FileTree />
+    </aside>
 
-      <!-- 右栏：>= xl 常驻；其余宽度覆盖式抽屉 -->
-      <aside
-        class="glass fixed inset-y-0 right-0 z-40 flex w-[320px] shrink-0 flex-col border-l border-line transition-transform duration-200 ease-out xl:static xl:z-auto xl:translate-x-0"
-        :class="ui.inspectorOpen ? 'translate-x-0' : 'translate-x-full'"
-        aria-label="会话详情"
-      >
-        <div class="flex items-center justify-between border-b border-line px-3 py-2 xl:hidden">
-          <span class="text-ink-300">详情</span>
-          <button
-            type="button"
-            class="grid size-7 place-items-center rounded-lg text-ink-400 transition-colors hover:bg-white/[0.04] hover:text-ink-100"
-            aria-label="关闭详情面板"
-            @click="ui.closeAll()"
-          >
-            <svg viewBox="0 0 16 16" class="size-4" fill="none" stroke="currentColor" stroke-width="1.25">
-              <path d="M4 4l8 8M12 4l-8 8" stroke-linecap="round" />
-            </svg>
-          </button>
-        </div>
-        <slot name="inspector" />
-      </aside>
-
-      <!-- 抽屉遮罩：只在窄屏出现，且仅覆盖中栏 -->
-      <div
-        v-if="ui.navOpen || ui.inspectorOpen"
-        class="fixed inset-0 z-30 bg-sunken/70 md:hidden"
-        aria-hidden="true"
-        @click="ui.closeAll()"
-      />
-    </div>
+    <div
+      v-if="ui.navOpen || ui.treeOpen"
+      class="shell__scrim"
+      aria-hidden="true"
+      @click="ui.closeAll()"
+    />
   </div>
 </template>

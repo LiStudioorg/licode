@@ -4,8 +4,14 @@ import vue from '@vitejs/plugin-vue'
 import tailwindcss from '@tailwindcss/vite'
 
 /**
- * 纯前端骨架：当前只跑 mock 数据。
- * 代理指向 Go 后端，仅用于后续接真实 WebSocket/HTTP，不影响离线构建。
+ * Licode Web 前端。
+ *
+ * 产物为纯静态 SPA（单入口 index.html + assets/），由 Go 后端 go:embed
+ * 内嵌，并经 scripts/sync-frontend.sh 同步到 internal/web/dist。
+ *
+ * - base 固定 '/'：后端把 /assets/ 直接映射到产物目录，路径不能带前缀；
+ * - 不输出 sourcemap：产物入库，体积与源码泄露面都要小；
+ * - manualChunks 拆出 vendor：应用代码改动频繁，vendor 保持长缓存。
  */
 const BACKEND = process.env.LICODE_BACKEND ?? 'http://127.0.0.1:8080'
 
@@ -26,5 +32,17 @@ export default defineConfig({
   build: {
     outDir: 'dist',
     emptyOutDir: true,
+    sourcemap: false,
+    chunkSizeWarningLimit: 700,
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (id.includes('node_modules')) {
+            if (id.includes('vue-router')) return 'router'
+            return 'vendor'
+          }
+        },
+      },
+    },
   },
 })

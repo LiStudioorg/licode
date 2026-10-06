@@ -1,18 +1,17 @@
-import { ClientType, type OutgoingMessage, type ServerEvent } from './protocol'
+import type { ConnectionState, OutgoingMessage, ServerEvent } from './protocol'
 
 /**
  * Licode WebSocket 客户端。
  *
- * 职责边界：只负责连接生命周期、收发编解码、心跳与重连；
- * 不持有任何 UI 或业务状态（那些在 Pinia store 里）。
- * 这样断线重连时状态不会与 socket 实例耦合。
+ * 职责边界：只负责连接生命周期、编解码、心跳与重连；不持有 UI/业务状态
+ * （状态全在 Pinia store），断线重连不与视图状态耦合。
  *
  * 关键行为：
- *   - 同源连接：浏览器下用当前 origin 推导 ws(s)://，天然通过 Go 端
- *     originMatchesHost 的同源校验（端口敏感，不能用硬编码 host）；
- *   - 指数退避重连，带抖动，避免后端重启时全体客户端同时打满；
- *   - 应用层 ping 保活（Go 端读超时 75s，这里 25s 一次）；
- *   - 断线期间发送的消息进入待发队列，连上后按序补发。
+ *   - 同源连接：由当前 origin 推导 ws(s)://，天然通过 Go 端 originMatchesHost
+ *     的同源校验（端口敏感，不能硬编码 host）；
+ *   - 指数退避重连（带抖动），避免后端重启瞬间全体客户端同时打满；
+ *   - 应用层 ping 保活：后端读超时 75s，这里 25s 一次，空闲连接不被判半开；
+ *   - 断线期间发送进入待发队列（有界），连上后按序补发。
  */
 
 export interface SocketClientOptions {
@@ -21,10 +20,8 @@ export interface SocketClientOptions {
   /** 收到任何服务端事件时的回调 */
   onEvent: (event: ServerEvent) => void
   /** 连接状态变化回调 */
-  onState?: (state: 'idle' | 'connecting' | 'open' | 'reconnecting' | 'closed') => void
+  onState?: (state: ConnectionState) => void
 }
-
-type State = 'idle' | 'connecting' | 'open' | 'reconnecting' | 'closed'
 
 const PING_INTERVAL = 25_000
 const BASE_BACKOFF = 800
@@ -34,7 +31,7 @@ const MAX_PENDING = 100
 
 export class LicodeSocket {
   private ws: WebSocket | null = null
-  private state: State = 'idle'
+  private state: ConnectionState = 'idle'
   private attempt = 0
   private pingTimer: ReturnType<typeof setInterval> | null = null
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null
@@ -43,11 +40,11 @@ export class LicodeSocket {
 
   constructor(private readonly opts: SocketClientOptions) {}
 
-  get readyState(): State {
+  get readyState(): ConnectionState {
     return this.state
   }
 
-  private setState(next: State) {
+  private setState(next: ConnectionState) {
     if (this.state === next) return
     this.state = next
     this.opts.onState?.(next)
@@ -106,15 +103,15 @@ export class LicodeSocket {
     }
 
     ws.onerror = () => {
-      // onerror 后浏览器必然触发 onclose，重连逻辑统一走 onclose，避免双触发
+      // onerror 后浏览器必然触发 onclose，重连统一走 onclose，避免双触发
     }
   }
 
   private startPing() {
     this.stopPing()
-    // 应用层 ping：Go 端持有 75s 读超时，靠它顺延，防止空闲被判定为半开连接
+    // 应用层 ping：Go 端 75s 读超时依赖客户端流量顺延
     this.pingTimer = setInterval(() => {
-      this.send({ type: ClientType.Ping })
+      this.send({ type: 'ping' })
     }, PING_INTERVAL)
   }
 
@@ -156,14 +153,9 @@ export class LicodeSocket {
     this.connect()
   }
 
-  /** 审批回执。always 为 true 时表示「始终允许」（仅当前会话生效） */
+  /** 审批回执。always=true 表示「始终允许」（仅当前会话生效） */
   replyAsk(askId: string, approve: boolean, always = false) {
-    this.send({
-      type: ClientType.AskReply,
-      askId,
-      askApprove: approve,
-      askAlways: always,
-    })
+    this.send({ type: 'ask_reply', askId, askApprove: approve, askAlways: always })
   }
 
   /** 用户主动断开：不再自动重连 */

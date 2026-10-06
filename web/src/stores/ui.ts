@@ -1,30 +1,45 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 
-/**
- * 壳层 UI 状态：抽屉开合与面板可见性。
- * 与业务数据分开，避免会话切换时误触发布局重排。
- */
+/** 壳层 UI 状态：抽屉开合与宽屏折叠。与业务数据分开，避免会话切换引发布局重排。 */
 export const useUiStore = defineStore('ui', () => {
-  /** 窄屏下左栏以抽屉形式出现 */
+  /** 窄屏下左栏以 transform 抽屉出现 */
   const navOpen = ref(false)
-  /** 窄于 xl 时右栏以抽屉形式出现 */
-  const inspectorOpen = ref(false)
+  /** <1280px 时右栏（文件树）以浮层出现 */
+  const treeOpen = ref(false)
+  /** 宽屏下用户手动折叠左栏 */
+  const navCollapsed = ref(false)
+  /** 宽屏下用户手动折叠右栏 */
+  const treeCollapsed = ref(false)
 
   function toggleNav() {
     navOpen.value = !navOpen.value
-    if (navOpen.value) inspectorOpen.value = false
+    if (navOpen.value) treeOpen.value = false
   }
-
-  function toggleInspector() {
-    inspectorOpen.value = !inspectorOpen.value
-    if (inspectorOpen.value) navOpen.value = false
+  function toggleTree() {
+    treeOpen.value = !treeOpen.value
+    if (treeOpen.value) navOpen.value = false
   }
-
   function closeAll() {
     navOpen.value = false
-    inspectorOpen.value = false
+    treeOpen.value = false
+  }
+  function toggleNavCollapsed() {
+    navCollapsed.value = !navCollapsed.value
+  }
+  function toggleTreeCollapsed() {
+    treeCollapsed.value = !treeCollapsed.value
   }
 
-  return { navOpen, inspectorOpen, toggleNav, toggleInspector, closeAll }
+  return {
+    navOpen,
+    treeOpen,
+    navCollapsed,
+    treeCollapsed,
+    toggleNav,
+    toggleTree,
+    closeAll,
+    toggleNavCollapsed,
+    toggleTreeCollapsed,
+  }
 })
