@@ -44,10 +44,6 @@ nohup.out
 /web/dist/
 /web/.vite/
 
-# 前端冒烟测试的 IIFE 产物（仅本地验证用，不发布）
-/frontend/dist-iife/
-frontend.nuxt-backup/
-
 # 本地开发运行数据（mock 验证用）
 /.devhome/
 
