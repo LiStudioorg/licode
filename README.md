@@ -19,23 +19,90 @@
 - 热重载：SIGHUP 重载配置（修改 `~/.licode/config.json` 后 `kill -HUP <pid>` 即时生效，不中断服务）
 - 浅色/深色主题切换，流式工具调用渲染（参数/结果折叠卡片），生成中可随时"停止"
 - 系统提示词读取 `~/.licode/system-prompt.md`；`md/` 目录递归读取所有 `.md` 作为附加提示词
-- 离线前端：Nuxt 3 + Vue 静态 SPA（由 `nuxtweb/` 生成），JS/CSS 全部随二进制打包（`go:embed`），无任何 CDN 外部依赖，内网/离线环境开箱即用
+- 离线前端：Vite + Vue 3 + Pinia 静态 SPA（由 `web/` 生成），JS/CSS 全部随二进制打包（`go:embed`），无任何 CDN 外部依赖，内网/离线环境开箱即用
+- 响应式界面：桌面三栏（会话列表 / 对话 / 文件树），手机与平板自动切换为抽屉式单栏，软键盘弹出不遮挡输入框
 - 登录认证（默认用户名 `licode`，密码自行设置；未启用登录时页面会提醒如何启用）
 - HTTPS（`--https`，无证书时自动生成自签名证书）
 - 数据按系统用户隔离：每个系统用户在自己的家目录 `~/.licode` 运行，互不影响
 
+## 安装
+
+### 方式一：从 Release 下载（推荐）
+
+到 [Releases](https://github.com/LiStudioorg/licode/releases) 页面下载对应平台的二进制，赋权后直接运行，无需安装依赖：
+
+```bash
+# 以 Linux amd64 为例（把 URL 里的版本换成你要的版本）
+curl -L -o licode \
+  https://github.com/LiStudioorg/licode/releases/download/v0.5.0/licode-linux-amd64
+chmod +x licode
+./licode
+```
+
+一行命令自动识别平台（Linux / macOS）：
+
+```bash
+VERSION=v0.5.0
+OS=$(uname -s | tr '[:upper:]' '[:lower:]')          # linux / darwin
+ARCH=$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')
+curl -L -o licode \
+  "https://github.com/LiStudioorg/licode/releases/download/${VERSION}/licode-${OS}-${ARCH}"
+chmod +x licode && ./licode
+```
+
+可用平台：`linux`（amd64 / arm64 / 386）、`darwin`（amd64 / arm64）、`windows`（amd64 / arm64 / 386，后缀 `.exe`）、`freebsd`（amd64）。
+
+每个 Release 附 `checksums.txt`，可校验下载是否完整（注意下载时要用**原始文件名**，校验命令按清单里的名字匹配）：
+
+```bash
+curl -L -O https://github.com/LiStudioorg/licode/releases/download/v0.5.0/checksums.txt
+curl -L -O https://github.com/LiStudioorg/licode/releases/download/v0.5.0/licode-linux-amd64
+sha256sum -c checksums.txt --ignore-missing   # macOS 用 shasum -a 256 -c
+# → licode-linux-amd64: OK
+
+# 若已重命名为 licode，则手工比对：
+# sha256sum licode   然后与 checksums.txt 中对应行对照
+```
+
+安装到 PATH（可选）：
+
+```bash
+mkdir -p ~/.local/bin
+install -m 755 licode-linux-amd64 ~/.local/bin/licode
+# 若 ~/.local/bin 不在 PATH 中，追加一行到 shell 配置：
+# echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc && source ~/.bashrc
+```
+
+### 方式二：从源码构建
+
+```bash
+git clone https://github.com/LiStudioorg/licode.git
+cd licode
+./build.sh                  # 9 平台交叉编译，产物在 build/
+./build/licode-linux-amd64  # 启动
+```
+
+`build.sh` 默认**不重建前端**，直接使用仓库中已提交的 `internal/web/dist`（因此无需 Node.js，纯 Go 即可构建）。若改动了 `web/src/**` 需要重新编译前端：
+
+```bash
+cd web && npm install && npm run build   # 产出 web/dist
+LICODE_FRONTEND_BUILD=1 bash scripts/sync-frontend.sh   # 同步到 internal/web/dist
+cd .. && ./build.sh
+```
+
 ## 快速开始
 
 ```bash
-./build.sh                  # 一键编译（9 平台，产物在 build/）
-./build/licode-<os>-<arch>  # 启动（如 ./build/licode-linux-amd64）
+./licode                    # 默认监听 127.0.0.1:8080
  
 # 参数
-./build/licode-linux-amd64 --host 0.0.0.0 --port 8080    # 局域网/手机访问
-./build/licode-linux-amd64 --password mypass             # 启用登录（默认用户名 licode）
+./licode --host 0.0.0.0 --port 8080    # 局域网/手机访问
+./licode --password mypass             # 启用登录（默认用户名 licode）
 ```
 
 浏览器打开 `http://127.0.0.1:8080` 使用；手机访问请用 `--host 0.0.0.0` 并打开 `http://服务器IP:8080`。
+
+> ⚠️ 未设置 `--password` 时**不启用登录**。绑到 `0.0.0.0` 且无密码，意味着同网段任何人都能操作这个**可执行 Shell 命令**的 Agent，请务必配合 `--password` 使用。
 
 ## 工具与权限
  
@@ -104,9 +171,13 @@
 
 ```
 ~/.licode/
-├── config.json      配置文件（AI 设置等）
+├── config.json      配置文件（AI 设置等，网页端「设置」写回这里）
+├── config.toml      服务器选项（host/port/登录等启动期配置，由 -c 或默认路径读取）
+├── session.key      会话 Cookie 签名密钥（自动生成，请勿泄露）
 ├── skills/          技能（markdown）
 ├── mcp/             MCP 服务器配置
+├── plugins/         插件
+├── tools/           外部工具
 ├── sessions/        对话记录（实时保存）
 ├── logs/            日志
 ├── cache/           缓存
@@ -129,7 +200,9 @@
 ./build.sh      # 9 平台交叉编译，产物在 build/（CGO_ENABLED=0 静态编译）
 ```
 
-单二进制约 7 MB；完全静态编译，不依赖 glibc；空闲内存 < 30 MB。
+单二进制约 12 MB（含内嵌前端）；完全静态编译，不依赖 glibc；空闲内存 < 30 MB。
+
+推 `v*` 标签会触发 GitHub Actions 自动跑质量门禁（`go vet` + `go test`）并发布上述 9 个平台产物到 Release，详见 `.github/workflows/release.yml`。
 
 ## 架构
 
@@ -145,7 +218,11 @@
 │   ├── session/           # 多会话 + 实时落盘
 │   ├── settings/          # 设置 + ~/.licode 数据目录
 │   ├── websocket/         # Hub + 事件协议
-│   └── web/               # go:embed Nuxt 静态前端 + 旧版资源
+│   └── web/               # go:embed 内嵌前端产物（由 web/ 构建后同步）
+├── web/                   # 前端工程（Vite + Vue 3 + Pinia + Tailwind v4）
+│   ├── src/components/    # 布局外壳、输入区、状态栏、文件树等
+│   ├── src/views/         # 路由页：对话 / 文件 / 设置 / 诊断 / 登录
+│   └── src/stores/        # Pinia：会话、设置、界面状态
 └── build.sh               # 9 平台交叉编译
 ```
 
@@ -159,7 +236,7 @@ go test ./...      # 单元测试
 
 ## 联系与交流
 
-- **GitHub**：https://github.com/li63050a6/licode
+- **GitHub**：https://github.com/LiStudioorg/licode
 - **Gitee**：https://gitee.com/li63050a/licode
 - **开发者 B 站**：[小帅5656](https://b23.tv/nDqj0DT) — 关注获取最新动态、教程、演示
 - **QQ 技术交流群**：[点击加入](https://qun.qq.com/universal-share/share?ac=1&authKey=zq9BYcTtBQm6GbvWiEWiBvDWNWbqhw2%2F%2BRnGM21c0jcL%2FofGqBFeXLr%2BtYT3SkO6&busi_data=eyJncm91cENvZGUiOiIxMDI2OTM5NzQxIiwidG9rZW4iOiJxNkNWUTUxYXVxSmRHZXRvdWtkZnhaN25INzJrMmNaNFpVTjJ5ZTVLYmRvWTFuOEZTd093UXBtQi8vQWk2T1JyIiwidWluIjoiMzYzNTczNjE4MCJ9&data=073ZrPEFZXFvoEDWatbWTidAitiN4OIbiaVDWoR7hVIwJurEPC7Swm6OREVpn6omzobXLn3SRErNKxKbYDTZQA&svctype=4&tempid=h5_group_info)（群号：1026939741）— 提问、反馈 bug、讨论功能
