@@ -4,6 +4,24 @@
 
 > **重要声明：发行版可能并不代表最新版本，如想使用最新代码，请自行构建。**
 
+## 最新版本：v0.5.0
+
+前端整体重写为 Vite + Vue 3 单页应用，并修复若干权限与可靠性缺陷。完整说明见 [Release Notes](https://github.com/LiStudioorg/licode/releases/tag/v0.5.0)。
+
+- **界面重写**：Nuxt 3 → Vite 7 + Vue 3.5 + Pinia 3 + vue-router 4.6 + Tailwind v4。宽屏三栏（会话列表 / 对话 / 文件树），平板抽屉式，手机单栏；删除顶栏，底部状态栏统一显示轮次、步数、tok/s、用量与缓存命中。
+- **安全修复**：收紧权限旁路（未经 `Agent.Run` 注入钩子的调用不再默认放行副作用工具）；备份导入剥离会自动 spawn 命令的 MCP stdio 条目。
+- **可用性修复**：修正输出长度上限语义（原实现会导致新装默认配置被服务端 400 拒绝）；修复移动端新会话无输入框、软键盘遮挡输入框。
+- **⚠️ 前端目录变更**：`nuxtweb/` 已删除，源码改为 `web/`。数据目录 `~/.licode/` 格式未变，可直接沿用，无需迁移。
+
+```bash
+# 下载最新版（Linux / macOS）
+VERSION=v0.5.0
+OS=$(uname -s | tr '[:upper:]' '[:lower:]')
+ARCH=$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')
+curl -L -O "https://github.com/LiStudioorg/licode/releases/download/${VERSION}/licode-${OS}-${ARCH}"
+chmod +x licode-${OS}-${ARCH} && ./licode-${OS}-${ARCH} --password 你的密码
+```
+
 ## 功能
 
 - 多 AI 提供商一键切换：**OpenAI / Claude / Ollama / Gemini**（均用各自原生接口），可添加多个厂商并一键获取模型列表
