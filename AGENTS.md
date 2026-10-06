@@ -64,8 +64,15 @@ CGO_ENABLED=0 ./build.sh   # 9 平台静态编译，产物在 build/，全程纯
 
 ## 发布流程（用户授权后）
 
-1. `CGO_ENABLED=0 ./build.sh`（确认无 node 提示、9/9 成功）
+1. 确认质量门禁全绿：`go vet ./...` 与 `go test ./...`（CI 在发布前会再跑一次，不过就不出包）
 2. 显式 `git add` 相关文件 → commit（遵守 Git 提交规则）
-3. `git tag v0.0.0.x` → 推 GitHub（`origin` push 为 github）与 Gitee（Gitee 推送需在 URL 中使用用户提供的一次性 token，仓库内存储的 token 会过期）
-4. `gh release create v0.0.0.x --repo li63050a6/licode` + 上传 `build/` 下 9 个资产
-5. 安装到 `~/.local/bin/licode`
+3. 打 tag 并推送：`git tag -a vX.Y.Z -m "..."` → `git push origin main` → `git push origin vX.Y.Z`
+4. **推 tag 即自动发布**：`.github/workflows/release.yml` 监听 `v*`，会跑 vet/test 并交叉编译 9 个平台到 Release，附 `checksums.txt`。**无需手工 `gh release create`，也无需手工上传资产。**
+5. 用 `gh release edit` 或 REST API（`PATCH /repos/LiStudioorg/licode/releases/{id}`）补写 Release Notes —— 自动生成的说明只会给一行 changelog 链接，且基准常取到旧的 `v0.0.0.x`，务必改成上一个语义化版本。
+6. 安装到 `~/.local/bin/licode`（该目录可能不存在，需先 `mkdir -p`；`~/.profile` 已把它加入 PATH）
+
+仓库地址：**https://github.com/LiStudioorg/licode**（旧地址 `li63050a6/licode` 会 302 重定向到此处）。
+Gitee 镜像：https://gitee.com/li63050a/licode（推送需用户提供一次性 token，仓库内不存 token）。
+
+版本号采用语义化 `vMAJOR.MINOR.PATCH`（现有 `v0.2.0` / `v0.3.0` / `v0.4.0` / `v0.5.0`）。
+`internal/version` 的四位自动计数（`v0.0.0.x`）是更早的方案，仅存于历史 tag，**不要再新建该格式的 tag**。
